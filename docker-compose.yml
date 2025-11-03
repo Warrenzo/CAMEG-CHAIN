@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # Base de données PostgreSQL
+  db:
+    image: postgres:15-alpine
+    container_name: cameg-chain-db
+    environment:
+      POSTGRES_DB: CAMEG-CHAIN
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - cameg-network
+    restart: unless-stopped
+
+  # Backend API
+  backend:
+    build: ./backend
+    container_name: cameg-chain-backend
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/CAMEG-CHAIN
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=CAMEG-CHAIN
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - SECRET_KEY=your-secret-key-change-in-production
+      - AI_SERVICE_URL=http://ai-service:8001
+      - ENVIRONMENT=production
+      - DEBUG=False
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    networks:
+      - cameg-network
+    restart: unless-stopped
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Service IA
+  ai-service:
+    build: ./ai_service
+    container_name: cameg-chain-ai
+    environment:
+      - MODEL_PATH=/app/model/
+      - API_HOST=0.0.0.0
+      - API_PORT=8001
+    ports:
+      - "8001:8001"
+    networks:
+      - cameg-network
+    restart: unless-stopped
+    volumes:
+      - ./ai_service:/app
+    command: python app.py
+
+  # Frontend React
+  frontend:
+    build: ./frontend
+    container_name: cameg-chain-frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_AI_SERVICE_URL=http://localhost:8001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+      - ai-service
+    networks:
+      - cameg-network
+    restart: unless-stopped
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm start
+
+volumes:
+  postgres_data:
+
+networks:
+  cameg-network:
+    driver: bridge

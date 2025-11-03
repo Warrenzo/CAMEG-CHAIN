@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom container for consistent spacing */
+.container-custom {
+  @apply max-w-7xl mx-auto px-6 lg:px-8;
+}
+
+/* Primary Button */
+.btn-primary {
+  @apply inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-cameg-green hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cameg-green transition-colors duration-200;
+}
+
+/* Secondary Button */
+.btn-secondary {
+  @apply inline-flex items-center justify-center px-6 py-3 border border-cameg-blue text-base font-medium rounded-md text-cameg-blue bg-white hover:bg-cameg-blue hover:text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-cameg-blue transition-colors duration-200;
+}
+
+/* Outline Button */
+.btn-outline {
+  @apply inline-flex items-center justify-center px-6 py-3 border border-gray-300 text-base font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition-colors duration-200;
+}
+
+/* Form Input */
+.form-input {
+  @apply block w-full px-4 py-3 border border-gray-300 rounded-md shadow-sm focus:ring-cameg-blue focus:border-cameg-blue sm:text-sm transition-colors duration-200;
+}
+
+/* Card Style */
+.card {
+  @apply bg-white rounded-xl shadow-soft border border-gray-100;
+}
+
+/* Micro-interactions */
+.ao-card-hover {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ao-card-hover:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+
+.btn-micro {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-micro:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
+
+/* Accessibility */
+.text-accessible {
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+.text-accessible-sm {
+  font-size: 14px;
+  line-height: 1.4;
+}
