@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 from app.database import get_db, Base
 from app.config import settings
+from app.middleware.security import security_middleware
 
 # Base de données de test en mémoire
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
@@ -53,6 +54,9 @@ def db_session():
 def client(db_session):
     """Créer un client de test FastAPI"""
     app.dependency_overrides[get_db] = override_get_db
+    # Réinitialiser les compteurs de sécurité pour éviter les interférences entre tests
+    security_middleware.failed_attempts.clear()
+    security_middleware.blocked_ips.clear()
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

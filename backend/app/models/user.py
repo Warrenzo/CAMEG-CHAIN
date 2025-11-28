@@ -71,6 +71,7 @@ class Supplier(Base):
     
     # Phase 1 - Informations de base
     company_name = Column(String(200), nullable=False)
+    email = Column(String(100), nullable=False)  # Email du fournisseur (dupliqué depuis User pour facilité d'accès)
     country = Column(String(100), nullable=False)
     phone_number = Column(String(20), nullable=False)
     

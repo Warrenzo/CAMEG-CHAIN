@@ -10,7 +10,7 @@ import logging
 from typing import Dict, List, Optional
 from datetime import datetime
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, desc
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -86,7 +86,7 @@ class SupplierAIEngineSimple:
         """
         Analyse complète d'un fournisseur avec l'IA
         """
-        print(f"🤖 Début de l'analyse IA pour le fournisseur {supplier_id}")
+        logger.info("Debut analyse IA fournisseur %s", supplier_id)
         
         # Récupérer ou créer l'évaluation IA
         supplier_ai = db.query(SupplierAI).filter(
@@ -113,7 +113,7 @@ class SupplierAIEngineSimple:
         # Créer le log d'analyse
         self._create_analysis_log(supplier_ai, scores, recommendation, db)
         
-        print(f"✅ Analyse IA terminée - Score: {scores['total']:.1f}, Recommandation: {recommendation}")
+        logger.info("Analyse IA terminee - Score: %.1f, Recommandation: %s", scores['total'], recommendation)
         
         return {
             'supplier_id': supplier_id,
@@ -127,7 +127,7 @@ class SupplierAIEngineSimple:
         """
         Collecte les données externes pour l'évaluation
         """
-        print("🔍 Collecte des données externes...")
+        logger.info("Collecte des donnees externes pour IA")
         
         external_data = {}
         
@@ -224,7 +224,7 @@ class SupplierAIEngineSimple:
         """
         Calcule les scores d'évaluation selon la grille d'analyse
         """
-        print("📊 Calcul des scores d'évaluation...")
+        logger.info("Calcul des scores d'evaluation IA")
         
         scores = {}
         
@@ -596,68 +596,94 @@ class SupplierAIEngineSimple:
         db.add(log)
         db.commit()
     
-    def search_suppliers(self, query: str, filters: Dict, db: Session) -> Dict:
+    def search_suppliers(self, query: Optional[str], filters: Dict, db: Session) -> Dict:
         """
         Recherche de fournisseurs avec filtres avancés
         """
-        print(f"🔍 Recherche de fournisseurs: {query}")
+        logger.info("Recherche IA de fournisseurs - terme: %s", query or "aucun")
         
-        # Construire la requête
-        query_obj = db.query(SupplierAI).join(Supplier)
-        
-        # Filtres
-        if filters.get('relation_type'):
-            query_obj = query_obj.filter(SupplierAI.relation_cameg == filters['relation_type'])
-        
-        if filters.get('min_score'):
-            query_obj = query_obj.filter(SupplierAI.score_predictif_total >= filters['min_score'])
-        
-        if filters.get('recommendation'):
-            query_obj = query_obj.filter(SupplierAI.ai_recommendation == filters['recommendation'])
-        
-        if filters.get('country'):
-            query_obj = query_obj.join(Supplier).filter(Supplier.country == filters['country'])
-        
-        # Recherche textuelle
-        if query:
-            query_obj = query_obj.join(Supplier).filter(
-                or_(
-                    Supplier.company_name.ilike(f"%{query}%"),
-                    Supplier.legal_name.ilike(f"%{query}%")
+        try:
+            # Construire la requête avec jointure explicite
+            query_obj = db.query(SupplierAI).join(Supplier, SupplierAI.supplier_id == Supplier.id)
+            
+            # Filtres
+            if filters.get('relation_type'):
+                query_obj = query_obj.filter(SupplierAI.relation_cameg == filters['relation_type'])
+            
+            if filters.get('min_score'):
+                query_obj = query_obj.filter(SupplierAI.score_predictif_total >= filters['min_score'])
+            
+            if filters.get('recommendation'):
+                query_obj = query_obj.filter(SupplierAI.ai_recommendation == filters['recommendation'])
+            
+            if filters.get('country'):
+                query_obj = query_obj.filter(Supplier.country == filters['country'])
+            
+            # Recherche textuelle
+            if query:
+                query_obj = query_obj.filter(
+                    or_(
+                        Supplier.company_name.ilike(f"%{query}%"),
+                        Supplier.legal_name.ilike(f"%{query}%")
+                    )
                 )
-            )
-        
-        # Exécuter la requête
-        suppliers = query_obj.limit(50).all()
-        
-        # Organiser les résultats par type
-        results = {
-            'partenaires_actuels': [],
-            'nouveaux_prequalifies': [],
-            'a_auditer': [],
-            'total': len(suppliers)
-        }
-        
-        for supplier_ai in suppliers:
-            supplier_data = {
-                'id': str(supplier_ai.supplier_id),
-                'company_name': supplier_ai.supplier.company_name,
-                'country': supplier_ai.supplier.country,
-                'score': supplier_ai.score_predictif_total,
-                'recommendation': supplier_ai.ai_recommendation,
-                'relation_type': supplier_ai.relation_cameg,
-                'who_pq_status': supplier_ai.who_pq_status,
-                'last_analysis': supplier_ai.ai_analysis_date
+            
+            # Tri par score décroissant pour mettre en avant les meilleurs profils
+            query_obj = query_obj.order_by(desc(SupplierAI.score_predictif_total))
+            
+            limit = int(filters.get('limit') or 50)
+            skip = int(filters.get('skip') or 0)
+            
+            total_count = query_obj.count()
+            suppliers = query_obj.offset(skip).limit(limit).all()
+            
+            # Organiser les résultats par type
+            results = {
+                'partenaires_actuels': [],
+                'nouveaux_prequalifies': [],
+                'a_auditer': [],
+                'total': total_count
             }
             
-            if supplier_ai.relation_cameg == RelationCameg.ANCIEN:
-                results['partenaires_actuels'].append(supplier_data)
-            elif supplier_ai.ai_recommendation == AiRecommendation.PREQUALIFIE:
-                results['nouveaux_prequalifies'].append(supplier_data)
-            else:
-                results['a_auditer'].append(supplier_data)
-        
-        return results
+            for supplier_ai in suppliers:
+                # Vérifier que le supplier existe
+                if not supplier_ai.supplier:
+                    logger.warning("SupplierAI %s n'a pas de supplier associé", supplier_ai.id)
+                    continue
+                
+                supplier_data = {
+                    'id': str(supplier_ai.supplier_id),
+                    'company_name': supplier_ai.supplier.company_name or '',
+                    'country': supplier_ai.supplier.country or '',
+                    'score': float(supplier_ai.score_predictif_total) if supplier_ai.score_predictif_total else 0.0,
+                    'recommendation': supplier_ai.ai_recommendation or '',
+                    'relation_type': supplier_ai.relation_cameg or '',
+                    'who_pq_status': supplier_ai.who_pq_status or '',
+                    'last_analysis': supplier_ai.ai_analysis_date
+                }
+                
+                # Comparer avec les valeurs string des enums
+                relation_value = supplier_ai.relation_cameg or ''
+                recommendation_value = supplier_ai.ai_recommendation or ''
+                
+                if relation_value == RelationCameg.ANCIEN.value:
+                    results['partenaires_actuels'].append(supplier_data)
+                elif recommendation_value == AiRecommendation.PREQUALIFIE.value:
+                    results['nouveaux_prequalifies'].append(supplier_data)
+                else:
+                    results['a_auditer'].append(supplier_data)
+            
+            return results
+            
+        except Exception as e:
+            logger.error("Erreur lors de la recherche de fournisseurs: %s", str(e), exc_info=True)
+            # Retourner un résultat vide en cas d'erreur
+            return {
+                'partenaires_actuels': [],
+                'nouveaux_prequalifies': [],
+                'a_auditer': [],
+                'total': 0
+            }
     
     def create_recommendation(self, supplier_id: str, user_id: str, recommendation_type: str, justification: str, db: Session) -> Dict:
         """

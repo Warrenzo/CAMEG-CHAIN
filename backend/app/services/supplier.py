@@ -5,6 +5,7 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from datetime import datetime
+import uuid
 
 from app.models.user import Supplier, User, UserStatus
 from app.schemas.user import SupplierPhase1Create, SupplierPhase2Update
@@ -16,8 +17,15 @@ class SupplierService:
     def create_supplier_phase1(db: Session, supplier_data: SupplierPhase1Create, user_id: str) -> Supplier:
         """Créer un fournisseur Phase 1"""
         try:
+            try:
+                user_uuid = uuid.UUID(str(user_id))
+            except (ValueError, TypeError):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Identifiant utilisateur invalide"
+                )
             # Vérifier si l'utilisateur existe
-            user = db.query(User).filter(User.id == user_id).first()
+            user = db.query(User).filter(User.id == user_uuid).first()
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -26,8 +34,9 @@ class SupplierService:
             
             # Créer le profil fournisseur
             supplier = Supplier(
-                user_id=user_id,
+                user_id=user_uuid,
                 company_name=supplier_data.company_name,
+                email=supplier_data.email,  # Ajouter l'email (requis par la base de données)
                 country=supplier_data.country,
                 phone_number=supplier_data.phone_number,
                 profile_completion_percentage="25",
@@ -50,7 +59,14 @@ class SupplierService:
     @staticmethod
     def update_supplier_phase2(db: Session, supplier_id: str, update_data: SupplierPhase2Update) -> Supplier:
         """Mettre à jour le profil fournisseur Phase 2"""
-        supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+        try:
+            supplier_uuid = uuid.UUID(str(supplier_id))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Identifiant fournisseur invalide"
+            )
+        supplier = db.query(Supplier).filter(Supplier.id == supplier_uuid).first()
         if not supplier:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -117,12 +133,20 @@ class SupplierService:
     @staticmethod
     def get_supplier_by_user_id(db: Session, user_id: str) -> Optional[Supplier]:
         """Récupérer un fournisseur par user_id"""
-        return db.query(Supplier).filter(Supplier.user_id == user_id).first()
+        try:
+            user_uuid = uuid.UUID(str(user_id))
+        except (ValueError, TypeError):
+            return None
+        return db.query(Supplier).filter(Supplier.user_id == user_uuid).first()
     
     @staticmethod
     def get_supplier_by_id(db: Session, supplier_id: str) -> Optional[Supplier]:
         """Récupérer un fournisseur par ID"""
-        return db.query(Supplier).filter(Supplier.id == supplier_id).first()
+        try:
+            supplier_uuid = uuid.UUID(str(supplier_id))
+        except (ValueError, TypeError):
+            return None
+        return db.query(Supplier).filter(Supplier.id == supplier_uuid).first()
     
     @staticmethod
     def get_all_suppliers(db: Session, skip: int = 0, limit: int = 100) -> List[Supplier]:
@@ -137,7 +161,14 @@ class SupplierService:
     @staticmethod
     def validate_supplier(db: Session, supplier_id: str, action: str, notes: Optional[str] = None) -> Supplier:
         """Valider ou rejeter un fournisseur"""
-        supplier = db.query(Supplier).filter(Supplier.id == supplier_id).first()
+        try:
+            supplier_uuid = uuid.UUID(str(supplier_id))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Identifiant fournisseur invalide"
+            )
+        supplier = db.query(Supplier).filter(Supplier.id == supplier_uuid).first()
         if not supplier:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

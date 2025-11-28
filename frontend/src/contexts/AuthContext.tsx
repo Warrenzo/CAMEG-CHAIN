@@ -40,6 +40,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     let isMounted = true;
+    let retryCount = 0;
+    const MAX_RETRIES = 2;
     
     const loadUser = async () => {
       if (token) {
@@ -48,13 +50,36 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           if (isMounted) {
             setUser(response.data);
             setIsAuthenticated(true);
+            retryCount = 0; // Réinitialiser le compteur en cas de succès
           }
-        } catch (error) {
-          console.error("Token validation failed:", error);
+        } catch (error: any) {
+          // Ne pas logger les erreurs 429 (rate limiting) pour éviter le spam
+          if (error?.response?.status !== 429) {
+            console.error("Token validation failed:", error);
+          }
+          
+          // Ne pas supprimer le token immédiatement en cas d'erreur 429
+          if (error?.response?.status === 429) {
+            console.warn("Rate limiting détecté, attente avant nouvelle tentative...");
+            retryCount++;
+            if (retryCount < MAX_RETRIES) {
+              // Attendre 5 secondes avant de réessayer
+              setTimeout(() => {
+                if (isMounted) {
+                  loadUser();
+                }
+              }, 5000);
+              return;
+            }
+          }
+          
           if (isMounted) {
-            SecureStorage.removeToken();
-            setToken(null);
-            setIsAuthenticated(false);
+            // Ne supprimer le token que si ce n'est pas une erreur 429
+            if (error?.response?.status !== 429) {
+              SecureStorage.removeToken();
+              setToken(null);
+              setIsAuthenticated(false);
+            }
           }
         }
       }
@@ -74,15 +99,26 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setIsLoading(true);
     try {
       const response = await api.post('/auth/login', { email, password });
-      const { access_token, user: userData } = response.data;
+      const { access_token, refresh_token, user: userData } = response.data;
       SecureStorage.setToken(access_token);
+      SecureStorage.setRefreshToken(refresh_token);
       SecureStorage.setUserData(userData);
       setToken(access_token);
       setUser(userData);
       setIsAuthenticated(true);
       return { success: true, user: userData };
     } catch (error: any) {
-      console.error("Login failed:", error.response?.data || error.message);
+      // Filtrer les erreurs liées aux extensions de navigateur
+      const errorMsg = error.message || '';
+      if (!errorMsg.includes('message channel closed') && 
+          !errorMsg.includes('asynchronous response')) {
+        console.error("Login failed:", error.response?.data || error.message);
+        
+        // Afficher un message plus clair pour les erreurs de timeout
+        if (errorMsg.includes('timeout') || errorMsg.includes('ne répond pas')) {
+          console.error("⚠️ Le serveur backend ne répond pas. Vérifiez qu'il est démarré.");
+        }
+      }
       
       // Gestion des erreurs de validation Pydantic
       let errorMessage = "Échec de la connexion";
@@ -151,6 +187,13 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const logout = useCallback(() => {
+    // Révoquer le refresh token côté serveur (en arrière-plan, ne pas bloquer)
+    const refreshToken = SecureStorage.getRefreshToken();
+    if (refreshToken) {
+      api.post('/auth/logout', { refresh_token: refreshToken }).catch(() => {
+        // Ignorer les erreurs de logout (le token peut déjà être expiré)
+      });
+    }
     SecureStorage.clearAll();
     setToken(null);
     setUser(null);

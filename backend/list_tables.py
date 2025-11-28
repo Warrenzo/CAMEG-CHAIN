@@ -1,0 +1,36 @@
+class Tender(Base):
+    __tablename__ = "tenders"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    reference = Column(String(50), unique=True, nullable=False, index=True)
+    title = Column(String(200), nullable=False)
+    description = Column(Text, nullable=False)
+    category = Column(String(100), nullable=False)
+
+    publication_date = Column(DateTime(timezone=True), nullable=False)
+    opening_date = Column(DateTime(timezone=True), nullable=False)
+    closing_date = Column(DateTime(timezone=True), nullable=False)
+
+    tender_type = Column(Enum(TenderType), default=TenderType.OPEN, nullable=False)
+    status = Column(Enum(TenderStatus), default=TenderStatus.DRAFT, nullable=False)
+    eligibility_rules = Column(JSON)
+    required_documents = Column(JSON)
+    estimated_value = Column(Float)
+    currency = Column(String(3), default="XOF")
+    evaluation_criteria = Column(JSON)
+    contact_person = Column(String(100))
+    contact_email = Column(String(100))
+    contact_phone = Column(String(20))
+    rfp_document_path = Column(String(500))
+    annexes = Column(JSON)
+    views_count = Column(Integer, default=0)
+    eoi_count = Column(Integer, default=0)
+    bids_count = Column(Integer, default=0)
+    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    creator = relationship("User")
+    expressions_of_interest = relationship("ExpressionOfInterest", back_populates="tender")
+    bids = relationship("Bid", back_populates="tender")
+    documents = relationship("TenderDocument", back_populates="tender")

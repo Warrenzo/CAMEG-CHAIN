@@ -190,6 +190,7 @@ class SupplierResponse(BaseModel):
     id: UUID
     user_id: UUID
     company_name: str
+    email: str  # Email du fournisseur
     country: str
     phone_number: str
     legal_name: Optional[str] = None
@@ -247,9 +248,13 @@ class LoginRequest(BaseModel):
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     expires_in: int
     user: UserResponse
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 # Schémas pour l'administration
 class SupplierValidationRequest(BaseModel):

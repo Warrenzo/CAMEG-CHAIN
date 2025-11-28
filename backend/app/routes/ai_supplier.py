@@ -2,25 +2,30 @@
 Routes pour l'évaluation IA des fournisseurs
 Système d'analyse et de préqualification proactive
 """
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Iterable
 import asyncio
 import uuid
 import logging
+import io
+import csv
+from datetime import datetime, timezone
 
 from app.database import get_db
 from app.services.ai_supplier_engine_simple import SupplierAIEngineSimple
-from app.models.supplier_ai import SupplierAI, SupplierRecommendation
+from app.models.supplier_ai import SupplierAI, SupplierRecommendation, AiAnalysisLog, AiRecommendation
 from app.models.user import Supplier
 from app.schemas.ai_supplier import (
     SupplierAnalysisRequest, SupplierAnalysisResponse,
     SupplierSearchRequest, SupplierSearchResponse,
     RecommendationRequest, RecommendationResponse,
-    SupplierAIResponse, ExternalDataSourceResponse
+    SupplierAIResponse, ExternalDataSourceResponse,
+    SupplierExportRequest, AiMonitoringResponse
 )
 
-router = APIRouter(prefix="/ai/suppliers", tags=["AI Supplier Evaluation"])
+router = APIRouter(prefix="/api/v1/ai/suppliers", tags=["AI Supplier Evaluation"])
 logger = logging.getLogger(__name__)
 
 # Instance du moteur IA
@@ -132,20 +137,51 @@ async def search_suppliers(
             'relation_type': request.relation_type,
             'min_score': request.min_score,
             'recommendation': request.recommendation,
-            'country': request.country
+            'country': request.country,
+            'limit': request.limit,
+            'skip': request.skip
         }
         
         results = ai_engine.search_suppliers(request.query, filters, db)
         
+        # Construire la réponse avec les résultats
+        from app.schemas.ai_supplier import SupplierSearchResults, SupplierSearchResult
+        
+        # Convertir les dictionnaires en objets SupplierSearchResult
+        def convert_to_search_result(item: dict) -> SupplierSearchResult:
+            return SupplierSearchResult(
+                id=item.get('id', ''),
+                company_name=item.get('company_name', ''),
+                country=item.get('country', ''),
+                score=item.get('score', 0.0),
+                recommendation=item.get('recommendation'),
+                relation_type=item.get('relation_type'),
+                who_pq_status=item.get('who_pq_status'),
+                last_analysis=item.get('last_analysis')
+            )
+        
+        search_results = SupplierSearchResults(
+            partenaires_actuels=[convert_to_search_result(item) for item in results.get('partenaires_actuels', [])],
+            nouveaux_prequalifies=[convert_to_search_result(item) for item in results.get('nouveaux_prequalifies', [])],
+            a_auditer=[convert_to_search_result(item) for item in results.get('a_auditer', [])],
+            total=results.get('total', 0)
+        )
+        
         return SupplierSearchResponse(
             query=request.query,
             filters=filters,
-            results=results,
-            total_found=results['total']
+            results=search_results,
+            total_found=results.get('total', 0)
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erreur lors de la recherche: {str(e)}")
+        logger.error("Erreur lors de la recherche de fournisseurs IA: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erreur lors de la recherche: {str(e)}"
+        )
 
 @router.get("/search/filters")
 async def get_search_filters():
@@ -325,6 +361,117 @@ async def get_external_sources(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur lors de la récupération des sources: {str(e)}")
+
+@router.get("/export")
+async def export_suppliers(
+    query: Optional[str] = Query(None),
+    relation_type: Optional[str] = Query(None),
+    recommendation: Optional[str] = Query(None),
+    min_score: Optional[float] = Query(None),
+    country: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """
+    Export CSV des fournisseurs IA correspondant aux filtres.
+    """
+    try:
+        filters = {
+            'relation_type': relation_type,
+            'min_score': min_score,
+            'recommendation': recommendation,
+            'country': country,
+            'limit': 10000,
+            'skip': 0
+        }
+        results = ai_engine.search_suppliers(query, filters, db)
+
+        def flatten(result_dict: Dict[str, List[Dict]]) -> Iterable[Dict]:
+            for category in ('partenaires_actuels', 'nouveaux_prequalifies', 'a_auditer'):
+                for item in result_dict.get(category, []):
+                    yield item
+
+        def generate_csv():
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow([
+                "Fournisseur",
+                "Pays",
+                "Score",
+                "Recommandation IA",
+                "Relation CAMEG",
+                "Statut WHO PQ",
+                "Dernière analyse"
+            ])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+            for supplier in flatten(results):
+                writer.writerow([
+                    supplier.get('company_name', ''),
+                    supplier.get('country', ''),
+                    f"{supplier.get('score', 0):.2f}",
+                    supplier.get('recommendation', ''),
+                    supplier.get('relation_type', ''),
+                    supplier.get('who_pq_status', ''),
+                    supplier.get('last_analysis').isoformat() if supplier.get('last_analysis') else ''
+                ])
+                yield output.getvalue()
+                output.seek(0)
+                output.truncate(0)
+
+        filename = f"ai_suppliers_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.csv"
+        headers = {"Content-Disposition": f"attachment; filename={filename}"}
+        return StreamingResponse(generate_csv(), media_type="text/csv", headers=headers)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lors de l'export CSV: {str(e)}")
+
+@router.get("/monitoring/live", response_model=AiMonitoringResponse)
+async def live_monitoring(
+    db: Session = Depends(get_db)
+):
+    """
+    Monitoring temps réel : dernières analyses IA et files d'attente.
+    """
+    try:
+        recent_logs = db.query(AiAnalysisLog, SupplierAI, Supplier)\
+            .join(SupplierAI, AiAnalysisLog.supplier_ai_id == SupplierAI.id)\
+            .join(Supplier, SupplierAI.supplier_id == Supplier.id)\
+            .order_by(AiAnalysisLog.created_at.desc())\
+            .limit(5)\
+            .all()
+
+        recent_analyses = []
+        for log, supplier_ai, supplier in recent_logs:
+            recent_analyses.append({
+                "id": str(log.id),
+                "supplier_id": str(supplier_ai.supplier_id),
+                "supplier_name": supplier.company_name,
+                "supplier_country": supplier.country,
+                "score_after": (log.scores_after or {}).get('total') if log.scores_after else supplier_ai.score_predictif_total,
+                "recommendation_after": log.recommendation_after or supplier_ai.ai_recommendation,
+                "analysis_type": log.analysis_type,
+                "trigger_source": log.trigger_source,
+                "created_at": log.created_at,
+                "processing_time": log.processing_time
+            })
+
+        pending_recommendations = db.query(SupplierRecommendation)\
+            .filter(SupplierRecommendation.status == "pending").count()
+
+        high_risk = db.query(SupplierAI).filter(SupplierAI.ai_recommendation == AiRecommendation.RISQUE_ELEVE.value).count()
+
+        total_logs = db.query(AiAnalysisLog).count()
+
+        return AiMonitoringResponse(
+            recent_analyses=recent_analyses,
+            pending_recommendations=pending_recommendations,
+            high_risk_suppliers=high_risk,
+            total_logs=total_logs,
+            last_refresh=datetime.now(timezone.utc)
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur lors du monitoring IA: {str(e)}")
 
 @router.post("/batch-analyze")
 async def batch_analyze_suppliers(

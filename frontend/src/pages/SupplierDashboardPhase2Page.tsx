@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   User, 
   FileText, 
@@ -26,8 +27,11 @@ import {
   ChevronRight
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../contexts/AuthContext';
 
 const SupplierDashboardPhase2Page: React.FC = () => {
+  const { logout } = useAuth();
+  const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('accueil');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
   const [showSubmissionModal, setShowSubmissionModal] = useState(false);
@@ -896,7 +900,14 @@ const SupplierDashboardPhase2Page: React.FC = () => {
                 </div>
                 <span className="text-gray-700 font-medium">{supplierName}</span>
               </div>
-              <button className="btn-outline">
+              <button 
+                className="btn-outline"
+                onClick={() => {
+                  logout();
+                  toast.success('Déconnexion réussie');
+                  navigate('/login');
+                }}
+              >
                 <LogOut className="h-4 w-4 mr-2" />
                 Déconnexion
               </button>

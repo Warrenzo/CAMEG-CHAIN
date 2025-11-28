@@ -1,7 +1,43 @@
 // Service sécurisé pour la gestion du stockage local
 class SecureStorage {
   private static readonly TOKEN_KEY = 'cameg_auth_token';
+  private static readonly REFRESH_TOKEN_KEY = 'cameg_refresh_token';
   private static readonly USER_KEY = 'cameg_user_data';
+
+  // Décoder le JWT pour vérifier l'expiration
+  private static decodeToken(token: string): any | null {
+    try {
+      const base64Url = token.split('.')[1];
+      if (!base64Url) return null;
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(
+        atob(base64)
+          .split('')
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+      return JSON.parse(jsonPayload);
+    } catch {
+      return null;
+    }
+  }
+
+  // Vérifier si le token est expiré
+  static isTokenExpired(token: string): boolean {
+    try {
+      const decoded = this.decodeToken(token);
+      if (!decoded || !decoded.exp) return true;
+      
+      // Vérifier l'expiration (exp est en secondes, Date.now() est en millisecondes)
+      const expirationTime = decoded.exp * 1000;
+      const currentTime = Date.now();
+      
+      // Considérer le token comme expiré s'il expire dans moins de 5 secondes
+      return currentTime >= (expirationTime - 5000);
+    } catch {
+      return true;
+    }
+  }
 
   // Validation du token
   private static isValidToken(token: string): boolean {
@@ -11,6 +47,9 @@ class SecureStorage {
       
       // Vérifier que ce n'est pas un token expiré évident
       if (token.includes('expired') || token.includes('invalid')) return false;
+      
+      // Vérifier l'expiration JWT
+      if (this.isTokenExpired(token)) return false;
       
       return true;
     } catch {
@@ -29,6 +68,25 @@ class SecureStorage {
       }
     } catch (error) {
       console.error('Erreur lors du stockage du token:', error);
+    }
+  }
+
+  // Stockage sécurisé du refresh token
+  static setRefreshToken(refreshToken: string): void {
+    try {
+      localStorage.setItem(this.REFRESH_TOKEN_KEY, refreshToken);
+    } catch (error) {
+      console.error('Erreur lors du stockage du refresh token:', error);
+    }
+  }
+
+  // Récupération du refresh token
+  static getRefreshToken(): string | null {
+    try {
+      return localStorage.getItem(this.REFRESH_TOKEN_KEY);
+    } catch (error) {
+      console.error('Erreur lors de la récupération du refresh token:', error);
+      return null;
     }
   }
 
@@ -52,6 +110,7 @@ class SecureStorage {
   static removeToken(): void {
     try {
       localStorage.removeItem(this.TOKEN_KEY);
+      localStorage.removeItem(this.REFRESH_TOKEN_KEY);
       localStorage.removeItem(this.USER_KEY);
     } catch (error) {
       console.error('Erreur lors de la suppression du token:', error);

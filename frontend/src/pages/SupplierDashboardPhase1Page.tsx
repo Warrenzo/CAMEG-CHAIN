@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   User, 
   FileText, 
@@ -17,21 +18,181 @@ import {
   Shield,
   Building,
   X,
-  Send
+  Send,
+  RefreshCw
 } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { useAuth } from '../contexts/AuthContext';
+import SecureStorage from '../services/storage';
+
+interface SupplierProfile {
+  id: string;
+  company_name: string;
+  email: string;
+  country: string;
+  phone_number?: string;
+  profile_completion_percentage?: string;
+  profile_status?: string;
+  documents_uploaded?: string;
+  validated_by_admin?: boolean;
+  validation_notes?: string;
+  updated_at?: string;
+  created_at?: string;
+}
+
+interface TenderItem {
+  id: string;
+  title: string;
+  reference: string;
+  category: string;
+  opening_date?: string;
+  closing_date: string;
+  status: string;
+  tender_type: string;
+  can_view: boolean;
+  can_express_interest: boolean;
+  can_submit_bid: boolean;
+  can_download_documents: boolean;
+  missing_requirements: string[];
+  description?: string;
+}
+
+interface TenderListResponse {
+  tenders: TenderItem[];
+  total: number;
+  page: number;
+  size: number;
+  has_next: boolean;
+  has_prev: boolean;
+}
 
 const SupplierDashboardPhase1Page: React.FC = () => {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('accueil');
   const [showInterestModal, setShowInterestModal] = useState(false);
   const [showAIChat, setShowAIChat] = useState(false);
   const [aiMessage, setAiMessage] = useState('');
   const [tenderFilter, setTenderFilter] = useState('all');
+  const [supplierProfile, setSupplierProfile] = useState<SupplierProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
+  const [tenders, setTenders] = useState<TenderItem[]>([]);
+  const [tendersLoading, setTendersLoading] = useState(true);
+  const [tendersError, setTendersError] = useState<string | null>(null);
+  const [selectedTenderId, setSelectedTenderId] = useState<string | null>(null);
+  const [interestMessage, setInterestMessage] = useState('');
+  const [isSubmittingInterest, setIsSubmittingInterest] = useState(false);
 
-  // Données simulées
-  const supplierName = "PharmaTogo SARL";
-  const profileCompletion = 40;
-  const lastConnection = "16 octobre 2025";
+  const getApiBaseUrl = () => {
+    const apiUrl = process.env['REACT_APP_API_URL'] || 'http://localhost:8000';
+    return apiUrl.replace(/\/api\/v1\/?$/, '');
+  };
+
+  const handleUnauthorized = () => {
+    toast.error('Session expirée. Veuillez vous reconnecter.');
+    SecureStorage.removeToken();
+    navigate('/login');
+  };
+
+  const ensureAuthToken = () => {
+    const token = SecureStorage.getToken();
+    if (!token || SecureStorage.isTokenExpired(token)) {
+      handleUnauthorized();
+      return null;
+    }
+    return token;
+  };
+
+  const loadProfile = async (token: string) => {
+    setProfileLoading(true);
+    setProfileError(null);
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/api/v1/suppliers/profile`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Impossible de charger le profil fournisseur.');
+      }
+
+      const data: SupplierProfile = await response.json();
+      setSupplierProfile(data);
+    } catch (error: any) {
+      console.error('Erreur profil fournisseur:', error);
+      setProfileError(error.message || 'Erreur de chargement du profil.');
+    } finally {
+      setProfileLoading(false);
+    }
+  };
+
+  const loadTenders = async (token: string) => {
+    setTendersLoading(true);
+    setTendersError(null);
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/api/v1/tenders?status=published&limit=50`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Impossible de charger les appels d’offres.');
+      }
+
+      const data: TenderListResponse = await response.json();
+      setTenders(Array.isArray(data?.tenders) ? data.tenders : []);
+    } catch (error: any) {
+      console.error('Erreur AO fournisseurs:', error);
+      setTendersError(error.message || 'Erreur de chargement des appels d’offres.');
+    } finally {
+      setTendersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    const token = ensureAuthToken();
+    if (!token) return;
+    loadProfile(token);
+    loadTenders(token);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return '—';
+    const date = new Date(dateString);
+    if (Number.isNaN(date.getTime())) return dateString;
+    return date.toLocaleDateString('fr-FR');
+  };
+
+  const supplierName = supplierProfile?.company_name || user?.company_name || user?.email || 'Votre entreprise';
+  const profileCompletion = supplierProfile?.profile_completion_percentage
+    ? parseInt(supplierProfile.profile_completion_percentage, 10)
+    : 0;
+  const lastConnection = supplierProfile?.updated_at
+    ? formatDate(supplierProfile.updated_at)
+    : supplierProfile?.created_at
+    ? formatDate(supplierProfile.created_at)
+    : '—';
+  const profileStatus = supplierProfile?.profile_status || 'phase_1_complete';
+  const isProfileValidated = Boolean(supplierProfile?.validated_by_admin);
+  const canSubmitOffers = profileStatus === 'profile_complete' && isProfileValidated;
   
   const notifications = [
     { id: 1, type: 'new_tender', message: 'Un nouvel appel d\'offres "Fourniture de tests VIH" est ouvert jusqu\'au 30/10.', time: 'Il y a 2 heures' },
@@ -39,60 +200,65 @@ const SupplierDashboardPhase1Page: React.FC = () => {
     { id: 3, type: 'info', message: 'Votre compte est en cours d\'examen par la DAQP.', time: 'Il y a 2 jours' }
   ];
 
-  const tenders = [
-    {
-      id: 1,
-      title: 'Fourniture de tests VIH',
-      reference: 'AO-2025-01',
-      category: 'Tests diagnostiques',
-      deadline: '2025-10-30',
-      status: 'open',
-      type: 'current'
-    },
-    {
-      id: 2,
-      title: 'Médicaments antipaludiques',
-      reference: 'AO-2025-02',
-      category: 'Médicaments',
-      deadline: '2025-11-15',
-      status: 'open',
-      type: 'current'
-    },
-    {
-      id: 3,
-      title: 'Équipements médicaux',
-      reference: 'AO-2025-03',
-      category: 'Équipements',
-      deadline: '2025-12-01',
-      status: 'open',
-      type: 'upcoming'
-    },
-    {
-      id: 4,
-      title: 'Consommables médicaux',
-      reference: 'AO-2025-04',
-      category: 'Consommables',
-      deadline: '2025-09-15',
-      status: 'closed',
-      type: 'closed'
+  const handleShowInterest = (tender: TenderItem) => {
+    if (!tender.can_express_interest) {
+      toast.error('Votre profil ne permet pas encore de manifester votre intérêt pour cet appel d’offres.');
+      return;
     }
-  ];
-
-  const handleShowInterest = (_tenderId: string) => {
+    setSelectedTenderId(tender.id);
     setShowInterestModal(true);
   };
 
-  const handleConfirmInterest = () => {
-    toast.success('✅ Votre intérêt a bien été enregistré.\nVous recevrez une notification lorsque la phase de soumission sera ouverte.\nPensez à compléter votre profil pour soumettre votre offre dans les délais.', {
-      duration: 8000,
-    });
-    setShowInterestModal(false);
+  const handleConfirmInterest = async () => {
+    if (!selectedTenderId) return;
+    const token = ensureAuthToken();
+    if (!token) return;
+
+    setIsSubmittingInterest(true);
+    try {
+      const response = await fetch(`${getApiBaseUrl()}/api/v1/tenders/${selectedTenderId}/interest`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          message: interestMessage || undefined,
+          contact_preference: 'email'
+        })
+      });
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Impossible d’enregistrer votre intérêt.');
+      }
+
+      toast.success('Votre intérêt a bien été enregistré. Vous serez alerté dès l’ouverture des soumissions.');
+      setShowInterestModal(false);
+      setInterestMessage('');
+      setSelectedTenderId(null);
+      const freshToken = ensureAuthToken();
+      if (freshToken) {
+        loadTenders(freshToken);
+      }
+    } catch (error: any) {
+      console.error('Erreur manifestation intérêt:', error);
+      toast.error(error.message || 'Erreur lors de la manifestation d’intérêt.');
+    } finally {
+      setIsSubmittingInterest(false);
+    }
   };
 
   const handleRestrictedAction = (action: string) => {
-    toast.error(`⛔ Accès restreint. Votre compte doit être validé avant de ${action}.`, {
-      duration: 5000,
-    });
+    const reason = isProfileValidated
+      ? 'Votre profil doit être complet pour accéder à cette fonctionnalité.'
+      : 'Votre compte doit d’abord être validé par la DAQP.';
+    toast.error(`⛔ ${reason} (${action})`, { duration: 5000 });
   };
 
   const handleAIMessage = () => {
@@ -104,10 +270,38 @@ const SupplierDashboardPhase1Page: React.FC = () => {
     }
   };
 
-  const filteredTenders = tenders.filter(tender => {
+  const getTenderFilterKey = (tender: TenderItem) => {
+    const now = Date.now();
+    const opening = tender.opening_date ? new Date(tender.opening_date).getTime() : null;
+    const closing = tender.closing_date ? new Date(tender.closing_date).getTime() : null;
+
+    if (closing && closing < now) return 'closed';
+    if (opening && opening > now) return 'upcoming';
+    return 'current';
+  };
+
+  const filteredTenders = tenders.filter((tender) => {
     if (tenderFilter === 'all') return true;
-    return tender.type === tenderFilter;
+    return getTenderFilterKey(tender) === tenderFilter;
   });
+
+  const openTendersCount = tenders.filter((tender) => getTenderFilterKey(tender) === 'current').length;
+  const selectedTender = selectedTenderId ? tenders.find((t) => t.id === selectedTenderId) : null;
+  const profileCompletionValue = Number.isFinite(profileCompletion) ? Math.min(Math.max(profileCompletion, 0), 100) : 0;
+  const profileStatusMessage = (() => {
+    switch (profileStatus) {
+      case 'profile_complete':
+        return 'Votre profil est complet et en cours de revue.';
+      case 'phase_1_complete':
+        return 'Votre profil est en attente de validation par la DAQP.';
+      case 'profile_incomplete':
+        return 'Veuillez compléter les informations requises pour accéder à toutes les fonctionnalités.';
+      case 'profile_partial':
+        return 'Complétez la phase 2 pour débloquer l’accès complet.';
+      default:
+        return 'Contactez le support pour plus d’informations.';
+    }
+  })();
 
   const renderContent = () => {
     switch (activeSection) {
@@ -158,13 +352,15 @@ const SupplierDashboardPhase1Page: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-cameg-dark">Profil complété</h3>
-                    <p className="text-2xl font-bold text-orange-600">{profileCompletion}%</p>
+                    <p className="text-2xl font-bold text-orange-600">
+                      {profileLoading ? '...' : `${profileCompletionValue}%`}
+                    </p>
                   </div>
                 </div>
                 <div className="w-full bg-gray-200 rounded-full h-2 mb-3">
                   <div 
                     className="bg-orange-500 h-2 rounded-full transition-all duration-500"
-                    style={{ width: `${profileCompletion}%` }}
+                    style={{ width: `${profileLoading ? 0 : profileCompletionValue}%` }}
                   ></div>
                 </div>
                 <button 
@@ -183,7 +379,9 @@ const SupplierDashboardPhase1Page: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-cameg-dark">Appels d'offres disponibles</h3>
-                    <p className="text-2xl font-bold text-blue-600">{tenders.filter(t => t.status === 'open').length}</p>
+                    <p className="text-2xl font-bold text-blue-600">
+                      {tendersLoading ? '...' : openTendersCount}
+                    </p>
                   </div>
                 </div>
                 <button 
@@ -215,7 +413,9 @@ const SupplierDashboardPhase1Page: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold text-cameg-dark">Statut du compte</h3>
-                    <p className="text-sm font-medium text-orange-600">Actif (Limité)</p>
+                    <p className={`text-sm font-medium ${isProfileValidated ? 'text-green-600' : 'text-orange-600'}`}>
+                      {isProfileValidated ? 'Validé' : 'Actif (limité)'}
+                    </p>
                   </div>
                 </div>
                 <button className="text-cameg-blue text-sm hover:underline">
@@ -264,48 +464,69 @@ const SupplierDashboardPhase1Page: React.FC = () => {
 
               {/* Liste des appels d'offres */}
               <div className="space-y-4">
-                {filteredTenders.slice(0, 3).map((tender) => (
-                  <div key={tender.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <h4 className="text-lg font-semibold text-cameg-dark">{tender.title}</h4>
-                        <p className="text-gray-600">Catégorie: {tender.category}</p>
-                        <p className="text-gray-600">Clôture: {tender.deadline}</p>
-                      </div>
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                        tender.status === 'open' 
-                          ? 'bg-green-100 text-green-800' 
-                          : 'bg-gray-100 text-gray-800'
-                      }`}>
-                        {tender.status === 'open' ? 'En cours' : 'Clôturé'}
-                      </span>
-                    </div>
-                    <div className="flex space-x-3">
-                      <button className="btn-outline flex items-center space-x-2">
-                        <Eye className="h-4 w-4" />
-                        <span>Consulter</span>
-                      </button>
-                      <button 
-                        onClick={() => handleShowInterest(tender.id.toString())}
-                        className="btn-primary flex items-center space-x-2"
-                      >
-                        <Heart className="h-4 w-4" />
-                        <span>Manifester mon intérêt</span>
-                      </button>
-                      <button 
-                        onClick={() => handleRestrictedAction('soumettre une offre')}
-                        className="btn-outline flex items-center space-x-2 opacity-50 cursor-not-allowed"
-                        disabled
-                      >
-                        <Send className="h-4 w-4" />
-                        <span>Soumettre une offre</span>
-                      </button>
-                    </div>
-                    <div className="mt-2 text-sm text-orange-600">
-                      Complétez votre profil pour activer cette option.
-                    </div>
+                {tendersLoading ? (
+                  <div className="flex items-center space-x-2 text-gray-600">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <span>Chargement des appels d'offres...</span>
                   </div>
-                ))}
+                ) : tendersError ? (
+                  <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
+                    {tendersError}
+                  </div>
+                ) : filteredTenders.slice(0, 3).length === 0 ? (
+                  <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    Aucun appel d'offres disponible pour le moment.
+                  </div>
+                ) : (
+                  filteredTenders.slice(0, 3).map((tender) => {
+                    const isCurrent = getTenderFilterKey(tender) === 'current';
+                    const canExpress = tender.can_express_interest;
+                    const canSubmit = canSubmitOffers && tender.can_submit_bid;
+                    return (
+                      <div key={tender.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <h4 className="text-lg font-semibold text-cameg-dark">{tender.title}</h4>
+                            <p className="text-gray-600">Catégorie: {tender.category}</p>
+                            <p className="text-gray-600">Clôture: {formatDate(tender.closing_date)}</p>
+                          </div>
+                          <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                            isCurrent ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                          }`}>
+                            {isCurrent ? 'En cours' : 'Clôturé'}
+                          </span>
+                        </div>
+                        <div className="flex space-x-3 flex-wrap">
+                          <button className="btn-outline flex items-center space-x-2">
+                            <Eye className="h-4 w-4" />
+                            <span>Consulter</span>
+                          </button>
+                          <button 
+                            onClick={() => (canExpress ? handleShowInterest(tender) : handleRestrictedAction('manifester votre intérêt'))}
+                            className={`btn-primary flex items-center space-x-2 ${canExpress ? '' : 'opacity-50 cursor-not-allowed'}`}
+                            disabled={!canExpress}
+                          >
+                            <Heart className="h-4 w-4" />
+                            <span>Manifester mon intérêt</span>
+                          </button>
+                          <button 
+                            onClick={() => (canSubmit ? toast('Soumission non implémentée') : handleRestrictedAction('soumettre une offre'))}
+                            className={`btn-outline flex items-center space-x-2 ${canSubmit ? '' : 'opacity-50 cursor-not-allowed'}`}
+                            disabled={!canSubmit}
+                          >
+                            <Send className="h-4 w-4" />
+                            <span>Soumettre une offre</span>
+                          </button>
+                        </div>
+                        {!canSubmit && (
+                          <div className="mt-2 text-sm text-orange-600">
+                            Complétez et validez votre profil pour activer cette option.
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -389,10 +610,14 @@ const SupplierDashboardPhase1Page: React.FC = () => {
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
                 <div className="flex items-center space-x-2">
                   <AlertCircle className="h-5 w-5 text-yellow-600" />
-                  <span className="text-yellow-800 font-medium">Profil en attente de validation</span>
+                  <span className="text-yellow-800 font-medium">
+                    {profileLoading ? 'Chargement du statut...' : profileStatusMessage}
+                  </span>
                 </div>
                 <p className="text-yellow-700 mt-2">
-                  Votre profil sera accessible en modification une fois votre compte validé par la DAQP.
+                  {isProfileValidated
+                    ? 'Votre compte est validé. Les mises à jour importantes doivent passer par l’administrateur.'
+                    : 'Votre profil sera accessible en modification une fois votre compte validé par la DAQP.'}
                 </p>
               </div>
               
@@ -400,25 +625,25 @@ const SupplierDashboardPhase1Page: React.FC = () => {
                 <div>
                   <label className="form-label">Nom de l'entreprise</label>
                   <div className="form-input bg-gray-50" style={{ pointerEvents: 'none' }}>
-                    {supplierName}
+                    {profileLoading ? 'Chargement...' : supplierProfile?.company_name || '—'}
                   </div>
                 </div>
                 <div>
                   <label className="form-label">Pays</label>
                   <div className="form-input bg-gray-50" style={{ pointerEvents: 'none' }}>
-                    Togo
+                    {profileLoading ? 'Chargement...' : supplierProfile?.country || '—'}
                   </div>
                 </div>
                 <div>
                   <label className="form-label">Email</label>
                   <div className="form-input bg-gray-50" style={{ pointerEvents: 'none' }}>
-                    contact@pharmatogo.tg
+                    {profileLoading ? 'Chargement...' : supplierProfile?.email || user?.email || '—'}
                   </div>
                 </div>
                 <div>
                   <label className="form-label">Téléphone</label>
                   <div className="form-input bg-gray-50" style={{ pointerEvents: 'none' }}>
-                    +228 XX XX XX XX
+                    {profileLoading ? 'Chargement...' : supplierProfile?.phone_number || '+---'}
                   </div>
                 </div>
               </div>
@@ -464,65 +689,96 @@ const SupplierDashboardPhase1Page: React.FC = () => {
               </div>
 
               <div className="space-y-4">
-                {filteredTenders.map((tender) => (
-                  <div key={tender.id} className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
-                    <div className="flex justify-between items-start mb-4">
-                      <div>
-                        <h3 className="text-xl font-semibold text-cameg-dark mb-2">{tender.title}</h3>
-                        <div className="grid md:grid-cols-2 gap-4 text-sm text-gray-600">
+                {tendersLoading ? (
+                  <div className="flex items-center space-x-2 text-gray-600">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <span>Chargement des appels d'offres...</span>
+                  </div>
+                ) : tendersError ? (
+                  <div className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg p-3">
+                    {tendersError}
+                  </div>
+                ) : filteredTenders.length === 0 ? (
+                  <div className="text-sm text-gray-600 bg-gray-50 border border-gray-200 rounded-lg p-4">
+                    Aucun appel d'offres ne correspond à ce filtre.
+                  </div>
+                ) : (
+                  filteredTenders.map((tender) => {
+                    const filterKey = getTenderFilterKey(tender);
+                    const canExpress = tender.can_express_interest;
+                    const canSubmit = canSubmitOffers && tender.can_submit_bid;
+                    return (
+                      <div key={tender.id} className="border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
+                        <div className="flex justify-between items-start mb-4">
                           <div>
-                            <span className="font-medium">Référence:</span> {tender.reference}
-                          </div>
-                          <div>
-                            <span className="font-medium">Catégorie:</span> {tender.category}
-                          </div>
-                          <div>
-                            <span className="font-medium">Clôture:</span> {tender.deadline}
-                          </div>
-                          <div>
-                            <span className="font-medium">Statut:</span> 
-                            <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${
-                              tender.status === 'open' 
-                                ? 'bg-green-100 text-green-800' 
-                                : 'bg-gray-100 text-gray-800'
-                            }`}>
-                              {tender.status === 'open' ? 'En cours' : 'Clôturé'}
-                            </span>
+                            <h3 className="text-xl font-semibold text-cameg-dark mb-2">{tender.title}</h3>
+                            <div className="grid md:grid-cols-2 gap-4 text-sm text-gray-600">
+                              <div>
+                                <span className="font-medium">Référence:</span> {tender.reference}
+                              </div>
+                              <div>
+                                <span className="font-medium">Catégorie:</span> {tender.category}
+                              </div>
+                              <div>
+                                <span className="font-medium">Clôture:</span> {formatDate(tender.closing_date)}
+                              </div>
+                              <div>
+                                <span className="font-medium">Statut:</span>
+                                <span className={`ml-2 px-2 py-1 rounded-full text-xs font-medium ${
+                                  filterKey === 'closed' 
+                                    ? 'bg-gray-100 text-gray-800' 
+                                    : 'bg-green-100 text-green-800'
+                                }`}>
+                                  {filterKey === 'closed' ? 'Clôturé' : 'En cours'}
+                                </span>
+                              </div>
+                            </div>
                           </div>
                         </div>
+                        
+                        <div className="flex flex-wrap gap-3">
+                          <button className="btn-outline flex items-center space-x-2">
+                            <Eye className="h-4 w-4" />
+                            <span>Consulter l'appel d'offres</span>
+                          </button>
+                          <button 
+                            className={`btn-outline flex items-center space-x-2 ${tender.can_download_documents ? '' : 'opacity-50 cursor-not-allowed'}`}
+                            disabled={!tender.can_download_documents}
+                          >
+                            <Download className="h-4 w-4" />
+                            <span>Télécharger le dossier complet</span>
+                          </button>
+                          <button 
+                            onClick={() => (canExpress ? handleShowInterest(tender) : handleRestrictedAction('manifester votre intérêt'))}
+                            className={`btn-primary flex items-center space-x-2 ${canExpress ? '' : 'opacity-50 cursor-not-allowed'}`}
+                            disabled={!canExpress}
+                          >
+                            <Heart className="h-4 w-4" />
+                            <span>Manifester mon intérêt</span>
+                          </button>
+                          <button 
+                            onClick={() => (canSubmit ? toast('Soumission non implémentée') : handleRestrictedAction('soumettre une offre'))}
+                            className={`btn-outline flex items-center space-x-2 ${canSubmit ? '' : 'opacity-50 cursor-not-allowed'}`}
+                            disabled={!canSubmit}
+                          >
+                            <Send className="h-4 w-4" />
+                            <span>Soumettre une offre</span>
+                          </button>
+                        </div>
+                        {!canSubmit && (
+                          <div className="mt-3 text-sm text-orange-600 bg-orange-50 p-2 rounded">
+                            Complétez et validez votre profil pour activer la soumission.
+                            {tender.missing_requirements?.length > 0 && (
+                              <div className="text-xs text-orange-500 mt-1">
+                                Manquants: {tender.missing_requirements.join(', ')}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                    
-                    <div className="flex flex-wrap gap-3">
-                      <button className="btn-outline flex items-center space-x-2">
-                        <Eye className="h-4 w-4" />
-                        <span>Consulter l'appel d'offres</span>
-                      </button>
-                      <button className="btn-outline flex items-center space-x-2">
-                        <Download className="h-4 w-4" />
-                        <span>Télécharger le dossier complet</span>
-                      </button>
-                      <button 
-                        onClick={() => handleShowInterest(tender.id.toString())}
-                        className="btn-primary flex items-center space-x-2"
-                      >
-                        <Heart className="h-4 w-4" />
-                        <span>Manifester mon intérêt</span>
-                      </button>
-                      <button 
-                        onClick={() => handleRestrictedAction('soumettre une offre')}
-                        className="btn-outline flex items-center space-x-2 opacity-50 cursor-not-allowed"
-                        disabled
-                      >
-                        <Send className="h-4 w-4" />
-                        <span>Soumettre une offre</span>
-                      </button>
-                    </div>
-                    <div className="mt-3 text-sm text-orange-600 bg-orange-50 p-2 rounded">
-                      Complétez votre profil pour activer cette option.
-                    </div>
-                  </div>
-                ))}
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>
@@ -606,7 +862,14 @@ const SupplierDashboardPhase1Page: React.FC = () => {
                 </div>
                 <span className="text-gray-700 font-medium">{supplierName}</span>
               </div>
-              <button className="btn-outline">
+              <button 
+                className="btn-outline"
+                onClick={() => {
+                  logout();
+                  toast.success('Déconnexion réussie');
+                  navigate('/login');
+                }}
+              >
                 <LogOut className="h-4 w-4 mr-2" />
                 Déconnexion
               </button>
@@ -616,6 +879,11 @@ const SupplierDashboardPhase1Page: React.FC = () => {
       </header>
 
       <div className="container-custom py-8">
+        {profileError && (
+          <div className="mb-4 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg">
+            {profileError}
+          </div>
+        )}
         <div className="flex gap-8">
           {/* Sidebar - Menu latéral avec couleurs spécifiques */}
           <div className="w-64 bg-[#003366] rounded-xl shadow-soft p-6">
@@ -804,10 +1072,26 @@ const SupplierDashboardPhase1Page: React.FC = () => {
             <h3 className="text-lg font-semibold text-cameg-dark mb-4">
               Manifester mon intérêt
             </h3>
-            <p className="text-gray-600 mb-6">
-              Vous souhaitez manifester votre intérêt pour cet appel d'offres ?
-              Vous recevrez une notification lorsque la phase de soumission sera ouverte.
+            <div className="text-sm text-gray-600 mb-4">
+              {selectedTender ? (
+                <>
+                  <p className="font-medium text-cameg-dark">{selectedTender.title}</p>
+                  <p>Référence : {selectedTender.reference}</p>
+                </>
+              ) : (
+                <p>Sélectionnez un appel d'offres pour continuer.</p>
+              )}
+            </div>
+            <p className="text-gray-600 mb-4">
+              Vous recevrez une notification lorsque la phase de soumission sera ouverte. Vous pouvez laisser un message à l'équipe DAQP.
             </p>
+            <textarea
+              className="w-full border border-gray-300 rounded-lg p-3 text-sm mb-4 focus:ring-2 focus:ring-cameg-blue"
+              rows={4}
+              placeholder="Message (optionnel)"
+              value={interestMessage}
+              onChange={(e) => setInterestMessage(e.target.value)}
+            />
             <div className="flex space-x-3">
               <button
                 onClick={() => setShowInterestModal(false)}
@@ -818,8 +1102,9 @@ const SupplierDashboardPhase1Page: React.FC = () => {
               <button
                 onClick={handleConfirmInterest}
                 className="btn-primary flex-1"
+                disabled={isSubmittingInterest}
               >
-                Confirmer
+                {isSubmittingInterest ? 'Enregistrement...' : 'Confirmer'}
               </button>
             </div>
           </div>

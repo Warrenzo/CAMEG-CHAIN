@@ -65,7 +65,7 @@ def set_sqlite_pragma(dbapi_connection, connection_record):
             cursor.execute("SET statement_timeout = '30s'")
             cursor.execute("SET lock_timeout = '10s'")
             cursor.execute("SET idle_in_transaction_session_timeout = '60s'")
-            logger.info("✅ Paramètres de sécurité PostgreSQL configurés")
+            logger.info("Parametres de securite PostgreSQL configures")
 
 # Créer la session
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -81,7 +81,7 @@ def get_db():
     try:
         yield db
     except Exception as e:
-        logger.error(f"❌ Erreur de session DB: {e}")
+        logger.error("Erreur de session DB: %s", e)
         db.rollback()
         raise
     finally:
@@ -93,9 +93,9 @@ def init_db():
     """
     try:
         Base.metadata.create_all(bind=engine)
-        logger.info("✅ Base de données initialisée avec succès")
+        logger.info("Base de donnees initialisee avec succes")
     except Exception as e:
-        logger.error(f"❌ Erreur d'initialisation DB: {e}")
+        logger.error("Erreur d'initialisation DB: %s", e)
         raise
 
 def test_connection():
@@ -109,7 +109,7 @@ def test_connection():
             test_value = result.fetchone()[0]
             
             if test_value == 1:
-                logger.info("✅ Connexion à PostgreSQL réussie!")
+                logger.info("Connexion a PostgreSQL reussie")
                 
                 # Test de performance
                 import time
@@ -118,17 +118,17 @@ def test_connection():
                 response_time = time.time() - start_time
                 
                 if response_time < 1.0:
-                    logger.info(f"✅ Performance DB: {response_time:.3f}s")
+                    logger.info("Performance DB: %.3fs", response_time)
                 else:
-                    logger.warning(f"⚠️ Performance DB lente: {response_time:.3f}s")
+                    logger.warning("Performance DB lente: %.3fs", response_time)
                 
                 return True
             else:
-                logger.error("❌ Test de connexion DB échoué")
+                logger.error("Test de connexion DB echoue")
                 return False
                 
     except Exception as e:
-        logger.error(f"❌ Erreur de connexion à PostgreSQL: {e}")
+        logger.error("Erreur de connexion a PostgreSQL: %s", e)
         return False
 
 def get_db_stats():
@@ -157,5 +157,5 @@ def get_db_stats():
                 "status": "healthy"
             }
     except Exception as e:
-        logger.error(f"❌ Erreur stats DB: {e}")
+        logger.error("Erreur stats DB: %s", e)
         return {"status": "error", "message": str(e)}

@@ -1,7 +1,7 @@
 """
 Modèles pour la gestion des appels d'offres et soumissions
 """
-from sqlalchemy import Column, String, Boolean, DateTime, Enum, Text, ForeignKey, Integer, Float, JSON
+from sqlalchemy import Column, String, Boolean, DateTime, Enum as SQLEnum, Text, ForeignKey, Integer, Float, JSON
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -52,8 +52,8 @@ class Tender(Base):
     closing_date = Column(DateTime(timezone=True), nullable=False)
     
     # Configuration
-    tender_type = Column(Enum(TenderType), default=TenderType.OPEN, nullable=False)
-    status = Column(Enum(TenderStatus), default=TenderStatus.DRAFT, nullable=False)
+    tender_type = Column(String(50), default=TenderType.OPEN.value, nullable=False)  # Stocker directement la valeur string
+    status = Column(String(50), default=TenderStatus.DRAFT.value, nullable=False)  # Stocker directement la valeur string
     
     # Règles d'éligibilité
     eligibility_rules = Column(JSON)  # {"countries": ["CI", "TG"], "supplier_types": ["pharmaceutical"]}
@@ -127,7 +127,7 @@ class Bid(Base):
     
     # Informations de la soumission
     bid_reference = Column(String(50), unique=True, nullable=False)
-    status = Column(Enum(BidStatus), default=BidStatus.DRAFT, nullable=False)
+    status = Column(String(50), default=BidStatus.DRAFT.value, nullable=False)  # Stocker directement la valeur string
     
     # Offre financière
     total_amount = Column(Float)

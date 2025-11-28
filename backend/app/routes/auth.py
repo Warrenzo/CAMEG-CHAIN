@@ -4,6 +4,7 @@ Routes d'authentification et d'inscription
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
+from typing import Optional
 from datetime import timedelta
 
 from app.database import get_db
@@ -14,13 +15,19 @@ from app.schemas.user import (
     SupplierPhase1Response,
     LoginRequest,
     TokenResponse,
-    UserResponse
+    UserResponse,
+    RefreshTokenRequest
 )
 from app.models.user import User
 from app.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Authentication"])
 security = HTTPBearer()
+# Variante optionnelle qui n'impose pas la présence d'un header Authorization
+security_optional = HTTPBearer(auto_error=False)
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
@@ -35,7 +42,7 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Format de token invalide"
         )
-    payload = AuthService.verify_token(token)
+    payload = AuthService.verify_token(token, token_type="access")
     user_id = payload.get("sub")
     
     if user_id is None:
@@ -52,6 +59,19 @@ def get_current_user(
         )
     
     return user
+
+def get_optional_user(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional),
+    db: Session = Depends(get_db)
+):
+    """
+    Variante de get_current_user qui renvoie None si aucun token n'est fourni.
+    Permet d'exposer des routes publiques tout en autorisant des infos personnalisées
+    lorsque l'utilisateur est authentifié.
+    """
+    if credentials is None:
+        return None
+    return get_current_user(credentials, db)
 
 @router.post("/register/phase1", response_model=SupplierPhase1Response)
 async def register_supplier_phase1(
@@ -127,10 +147,17 @@ async def login(
         data={"sub": str(user.id)}, expires_delta=access_token_expires
     )
     
+    # Créer le refresh token
+    refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    refresh_token = AuthService.create_refresh_token(
+        data={"sub": str(user.id)}, expires_delta=refresh_token_expires
+    )
+    
     return TokenResponse(
         access_token=access_token,
+        refresh_token=refresh_token,
         expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        user=UserResponse.from_orm(user)
+        user=UserResponse.model_validate(user)
     )
 
 @router.get("/me", response_model=UserResponse)
@@ -140,13 +167,74 @@ async def get_current_user_info(
     """
     Obtenir les informations de l'utilisateur connecté
     """
-    return UserResponse.from_orm(current_user)
+    return UserResponse.model_validate(current_user)
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_token(
+    refresh_data: RefreshTokenRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Renouveler le token d'accès avec un refresh token
+    """
+    try:
+        # Vérifier le refresh token
+        payload = AuthService.verify_token(refresh_data.refresh_token, token_type="refresh")
+        user_id = payload.get("sub")
+        
+        if user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token invalide"
+            )
+        
+        # Vérifier que l'utilisateur existe toujours
+        user = AuthService.get_user_by_id(db, user_id)
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Utilisateur non trouvé ou désactivé"
+            )
+        
+        # Créer un nouveau token d'accès
+        access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = AuthService.create_access_token(
+            data={"sub": str(user.id)}, expires_delta=access_token_expires
+        )
+        
+        # Créer un nouveau refresh token (rotation)
+        refresh_token_expires = timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        refresh_token = AuthService.create_refresh_token(
+            data={"sub": str(user.id)}, expires_delta=refresh_token_expires
+        )
+        
+        # Révoquer l'ancien refresh token
+        AuthService.revoke_token(refresh_data.refresh_token)
+        
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_in=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            user=UserResponse.model_validate(user)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur lors du renouvellement du token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Impossible de renouveler le token"
+        )
 
 @router.post("/logout")
-async def logout():
+async def logout(refresh_data: RefreshTokenRequest = None):
     """
-    Déconnexion (côté client - invalider le token)
+    Déconnexion - Révoquer les tokens
     """
+    # Si un refresh token est fourni, le révoquer
+    if refresh_data and refresh_data.refresh_token:
+        AuthService.revoke_token(refresh_data.refresh_token)
+    
     return {"message": "Déconnexion réussie"}
 
 @router.get("/verify-email/{token}")

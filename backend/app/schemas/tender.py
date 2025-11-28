@@ -25,6 +25,17 @@ class TenderBase(BaseModel):
     contact_person: Optional[str] = None
     contact_email: Optional[str] = None
     contact_phone: Optional[str] = None
+    
+    @validator('description')
+    def validate_description(cls, v):
+        if not isinstance(v, str):
+            raise ValueError('La description doit être une chaîne de caractères')
+        v = v.strip() if v else ''
+        if not v:
+            raise ValueError('La description est obligatoire et ne peut pas être vide')
+        if len(v) < 10:
+            raise ValueError('La description doit contenir au moins 10 caractères')
+        return v
 
 class TenderCreate(TenderBase):
     """Création d'un appel d'offres"""

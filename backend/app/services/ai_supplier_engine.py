@@ -59,7 +59,7 @@ class SupplierAIEngine:
         """
         Analyse complète d'un fournisseur avec l'IA
         """
-        print(f"🤖 Début de l'analyse IA pour le fournisseur {supplier_id}")
+        logger.info("Debut de l'analyse IA pour le fournisseur %s", supplier_id)
         
         # Récupérer ou créer l'évaluation IA
         supplier_ai = db.query(SupplierAI).filter(
@@ -86,7 +86,7 @@ class SupplierAIEngine:
         # Créer le log d'analyse
         await self._create_analysis_log(supplier_ai, scores, recommendation, db)
         
-        print(f"✅ Analyse IA terminée - Score: {scores['total']:.1f}, Recommandation: {recommendation}")
+        logger.info("Analyse IA terminee - Score: %.1f, Recommandation: %s", scores['total'], recommendation)
         
         return {
             'supplier_id': supplier_id,
@@ -100,7 +100,7 @@ class SupplierAIEngine:
         """
         Collecte les données externes pour l'évaluation
         """
-        print("🔍 Collecte des données externes...")
+        logger.info("Collecte des donnees externes pour IA")
         
         external_data = {}
         
@@ -198,7 +198,7 @@ class SupplierAIEngine:
         """
         Calcule les scores d'évaluation selon la grille d'analyse
         """
-        print("📊 Calcul des scores d'évaluation...")
+        logger.info("Calcul des scores d'evaluation IA")
         
         scores = {}
         
@@ -435,7 +435,7 @@ class SupplierAIEngine:
         """
         Recherche de fournisseurs avec filtres avancés
         """
-        print(f"🔍 Recherche de fournisseurs: {query}")
+        logger.info("Recherche de fournisseurs IA - terme: %s", query)
         
         # Construire la requête
         query_obj = db.query(SupplierAI).join(Supplier)

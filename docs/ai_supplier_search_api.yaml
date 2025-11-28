@@ -1,0 +1,430 @@
+openapi: 3.0.3
+info:
+  title: CAMEG-CHAIN AI Supplier Search API
+  version: 0.1.0
+  description: |
+    Spécification initiale de l’API dédiée à la recherche et à l’analyse des fournisseurs via IA.
+    Cette version pose les bases contractuelles pour l’intégration côté Super-Admin.
+servers:
+  - url: https://api.cameg-chain.tg
+    description: Instance principale
+  - url: https://staging.api.cameg-chain.tg
+    description: Instance de préproduction
+tags:
+  - name: AI Suppliers
+    description: Recherche et analyse de fournisseurs via IA
+paths:
+  /api/v1/ai/suppliers/search:
+    post:
+      tags: [AI Suppliers]
+      summary: Lancer une recherche IA de fournisseurs
+      operationId: searchAISuppliers
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AISupplierSearchRequest'
+      responses:
+        '200':
+          description: Résultats de la recherche IA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AISupplierSearchResponse'
+        '400':
+          description: Requête invalide (filtres incohérents, query manquante…)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Jeton invalide
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Erreur interne du moteur IA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/ai/suppliers/{supplierId}:
+    get:
+      tags: [AI Suppliers]
+      summary: Récupérer la fiche IA complète d’un fournisseur
+      operationId: getAISupplier
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: supplierId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Fiche détaillée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AISupplierDetail'
+        '404':
+          description: Résultat IA introuvable ou expiré
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/ai/suppliers/{supplierId}/report:
+    post:
+      tags: [AI Suppliers]
+      summary: Générer un rapport IA (PDF/HTML) pour un fournisseur
+      operationId: generateAISupplierReport
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: supplierId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        description: Options de génération (langue, format…)
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AISupplierReportRequest'
+      responses:
+        '202':
+          description: Rapport en cours de génération (job asynchrone)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AISupplierReportResponse'
+        '400':
+          description: Paramètres invalides
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/ai/analyses:
+    get:
+      tags: [AI Suppliers]
+      summary: Lister les analyses IA passées/récentes
+      operationId: listAIAnalyses
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema:
+            type: string
+            enum: [running, completed, failed]
+        - in: query
+          name: page
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - in: query
+          name: size
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Liste des analyses IA
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIAnalysesListResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    AISupplierSearchRequest:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Requête en langage naturel
+          example: "Fournisseurs de Mégamylase en Europe"
+        filters:
+          type: object
+          properties:
+            regions:
+              type: array
+              items:
+                type: string
+              example: ["Europe", "Africa"]
+            countries:
+              type: array
+              items:
+                type: string
+              example: ["France", "USA"]
+            productCategories:
+              type: array
+              items:
+                type: string
+              example: ["API", "Medical devices"]
+            certifications:
+              type: array
+              items:
+                type: string
+              example: ["GMP", "ISO 13485"]
+            minScore:
+              type: number
+              format: float
+              example: 0.6
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+              minimum: 1
+              default: 1
+            size:
+              type: integer
+              minimum: 1
+              maximum: 50
+              default: 20
+      required: [query]
+
+    AISupplierSearchResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AISupplierSummary'
+
+    AISupplierSummary:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        country:
+          type: string
+        website:
+          type: string
+        matchedProducts:
+          type: array
+          items:
+            type: string
+        score:
+          $ref: '#/components/schemas/AISupplierScore'
+        certifications:
+          type: array
+          items:
+            type: string
+        matchedSources:
+          type: array
+          items:
+            $ref: '#/components/schemas/AISource'
+        internalStatus:
+          type: object
+          properties:
+            existsInCameg:
+              type: boolean
+            linkedSupplierId:
+              type: string
+              nullable: true
+        actions:
+          type: array
+          items:
+            $ref: '#/components/schemas/AISupplierAction'
+
+    AISupplierScore:
+      type: object
+      properties:
+        global:
+          type: number
+          format: float
+        relevance:
+          type: number
+          format: float
+        compliance:
+          type: number
+          format: float
+        reputation:
+          type: number
+          format: float
+        freshness:
+          type: string
+          format: date
+
+    AISource:
+      type: object
+      properties:
+        type:
+          type: string
+          example: "Marketplace"
+        title:
+          type: string
+        url:
+          type: string
+        snippet:
+          type: string
+        publishedAt:
+          type: string
+          format: date
+        reliability:
+          type: number
+          format: float
+
+    AISupplierAction:
+      type: object
+      properties:
+        type:
+          type: string
+          example: "ANALYZE"
+        label:
+          type: string
+
+    AISupplierDetail:
+      allOf:
+        - $ref: '#/components/schemas/AISupplierSummary'
+        - type: object
+          properties:
+            description:
+              type: string
+            contacts:
+              type: array
+              items:
+                $ref: '#/components/schemas/AISupplierContact'
+            timeline:
+              type: array
+              items:
+                $ref: '#/components/schemas/AITimelineEvent'
+            incidents:
+              type: array
+              items:
+                $ref: '#/components/schemas/AIIncident'
+            recommendations:
+              type: array
+              items:
+                type: string
+
+    AISupplierContact:
+      type: object
+      properties:
+        name:
+          type: string
+        role:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+
+    AITimelineEvent:
+      type: object
+      properties:
+        date:
+          type: string
+          format: date
+        title:
+          type: string
+        description:
+          type: string
+        severity:
+          type: string
+          enum: [info, warning, alert]
+
+    AIIncident:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        source:
+          $ref: '#/components/schemas/AISource'
+        impact:
+          type: string
+
+    AISupplierReportRequest:
+      type: object
+      properties:
+        format:
+          type: string
+          enum: [pdf, html]
+          default: pdf
+        language:
+          type: string
+          example: "fr"
+
+    AISupplierReportResponse:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
+        downloadUrl:
+          type: string
+          nullable: true
+
+    AIAnalysesListResponse:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AIAnalysisEntry'
+
+    AIAnalysisEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        query:
+          type: string
+        status:
+          type: string
+          enum: [running, completed, failed]
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+          nullable: true
+        summary:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        detail:
+          type: string
+

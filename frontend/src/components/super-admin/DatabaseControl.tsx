@@ -34,58 +34,70 @@ interface DatabaseStats {
 const DatabaseControl: React.FC = () => {
   const [isCreatingBackup, setIsCreatingBackup] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [tables, setTables] = useState<DatabaseTable[]>([]);
+  const [stats, setStats] = useState<DatabaseStats>({
+    totalSize: '0 MB',
+    totalTables: 0,
+    activeConnections: 0,
+    uptime: '0%',
+    lastMaintenance: 'N/A'
+  });
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Données simulées
-  const tables: DatabaseTable[] = [
-    {
-      name: 'Table fournisseurs',
-      status: 'ok',
-      size: '230 Mo',
-      lastBackup: '02:00',
-      records: 1247,
-      health: 98
-    },
-    {
-      name: 'Table évaluations',
-      status: 'ok',
-      size: '120 Mo',
-      lastBackup: '02:00',
-      records: 892,
-      health: 95
-    },
-    {
-      name: 'Table IA logs',
-      status: 'ok',
-      size: '45 Mo',
-      lastBackup: '02:00',
-      records: 2156,
-      health: 92
-    },
-    {
-      name: 'Table appels_offres',
-      status: 'warning',
-      size: '89 Mo',
-      lastBackup: '02:00',
-      records: 156,
-      health: 88
-    },
-    {
-      name: 'Table audit_logs',
-      status: 'ok',
-      size: '156 Mo',
-      lastBackup: '02:00',
-      records: 8934,
-      health: 96
-    }
-  ];
+  // Charger les données depuis l'API
+  React.useEffect(() => {
+    const loadData = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        
+        const apiUrl = process.env['REACT_APP_API_URL'] || 'http://localhost:8000';
+        
+        // Charger les statistiques
+        const statsResponse = await fetch(`${apiUrl}/api/v1/admin/system/database/stats`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (statsResponse.ok) {
+          const statsData = await statsResponse.json();
+          setStats(statsData);
+        }
+        
+        // Charger les tables
+        const tablesResponse = await fetch(`${apiUrl}/api/v1/admin/system/database/tables`, {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        
+        if (tablesResponse.ok) {
+          const tablesData = await tablesResponse.json();
+          setTables(tablesData.tables || []);
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement des données:', error);
+        // En cas d'erreur, utiliser les données par défaut
+        setTables([
+          {
+            name: 'Table fournisseurs',
+            status: 'ok',
+            size: '230 Mo',
+            lastBackup: '02:00',
+            records: 0,
+            health: 98
+          }
+        ]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    loadData();
+  }, []);
 
-  const stats: DatabaseStats = {
-    totalSize: '640 Mo',
-    totalTables: 12,
-    activeConnections: 8,
-    uptime: '99.98%',
-    lastMaintenance: '2025-10-15 03:00'
-  };
+
+  // Les stats sont maintenant chargées depuis l'API via useState
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -132,25 +144,91 @@ const DatabaseControl: React.FC = () => {
     return 'text-red-600';
   };
 
-  const handleInspectTable = (tableName: string) => {
-    toast.success(`Inspection de la table ${tableName}...`);
+  const handleInspectTable = async (tableName: string) => {
+    try {
+      const apiUrl = process.env['REACT_APP_API_URL'] || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/api/v1/admin/system/database/inspect/${tableName}`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        toast.success(`Table ${tableName}: ${data.records} enregistrements, ${data.size}`);
+      } else {
+        toast.error('Erreur lors de l\'inspection de la table');
+      }
+    } catch (error) {
+      toast.error('Erreur de connexion');
+    }
   };
 
   const handleCreateBackup = async () => {
     setIsCreatingBackup(true);
-    // Simulation d'une action
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    toast.success('Sauvegarde manuelle créée avec succès');
-    setIsCreatingBackup(false);
+    try {
+      const apiUrl = process.env['REACT_APP_API_URL'] || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/api/v1/admin/system/database/backup`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        await response.json();
+        toast.success('Sauvegarde manuelle créée avec succès');
+        // Rafraîchir les données après quelques secondes
+        setTimeout(() => {
+          window.location.reload();
+        }, 3000);
+      } else {
+        toast.error('Erreur lors de la création de la sauvegarde');
+      }
+    } catch (error) {
+      toast.error('Erreur de connexion');
+    } finally {
+      setIsCreatingBackup(false);
+    }
   };
 
   const handleRestore = async (tableName: string) => {
     setIsRestoring(true);
-    // Simulation d'une action
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    toast.success(`Restauration de ${tableName} terminée`);
-    setIsRestoring(false);
+    try {
+      const apiUrl = process.env['REACT_APP_API_URL'] || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/api/v1/admin/system/database/restore`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ backup_file: tableName })
+      });
+      
+      if (response.ok) {
+        toast.success(`Restauration de ${tableName} terminée`);
+      } else {
+        const error = await response.json();
+        toast.error(error.detail || 'Erreur lors de la restauration');
+      }
+    } catch (error) {
+      toast.error('Erreur de connexion');
+    } finally {
+      setIsRestoring(false);
+    }
   };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="text-center">
+          <RefreshCw className="h-8 w-8 animate-spin text-cameg-blue mx-auto mb-4" />
+          <p className="text-gray-600">Chargement des données...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

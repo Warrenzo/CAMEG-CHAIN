@@ -2,49 +2,140 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowLeft, Calendar, MapPin, Clock, ExternalLink } from 'lucide-react';
 
-const TendersPage: React.FC = () => {
-  // Données simulées pour les appels d'offres
-  const tenders = [
-    {
-      id: 1,
-      title: "Appel d'offres pour médicaments antipaludiques",
-      description: "Approvisionnement en médicaments antipaludiques pour le programme national de lutte contre le paludisme 2025.",
-      deadline: "2025-02-15",
-      status: "Ouvert",
-      location: "Lomé, Togo",
-      budget: "2,500,000,000 FCFA"
-    },
-    {
-      id: 2,
-      title: "Fourniture d'équipements médicaux",
-      description: "Acquisition d'équipements de diagnostic et de traitement pour les centres de santé.",
-      deadline: "2025-01-30",
-      status: "Ouvert",
-      location: "Tout le Togo",
-      budget: "1,800,000,000 FCFA"
-    },
-    {
-      id: 3,
-      title: "Médicaments essentiels - Lot 1",
-      description: "Approvisionnement en médicaments essentiels pour les hôpitaux publics.",
-      deadline: "2025-01-20",
-      status: "Bientôt clos",
-      location: "Région Maritime",
-      budget: "3,200,000,000 FCFA"
-    }
-  ];
+type TenderStatus =
+  | 'draft'
+  | 'published'
+  | 'open'
+  | 'closed'
+  | 'evaluated'
+  | 'awarded'
+  | 'cancelled';
 
-  const getStatusColor = (status: string) => {
+interface PublicTender {
+  id: string;
+  reference: string;
+  title: string;
+  description: string;
+  closing_date: string;
+  category: string;
+  status: TenderStatus;
+  estimated_value?: number;
+  currency?: string;
+  location?: string;
+}
+
+const TendersPage: React.FC = () => {
+  const [tenders, setTenders] = React.useState<PublicTender[]>([]);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const getApiBaseUrl = React.useCallback(() => {
+    const apiUrl = process.env['REACT_APP_API_URL'] || 'http://localhost:8000';
+    return apiUrl.replace(/\/api\/v1\/?$/, '');
+  }, []);
+
+  React.useEffect(() => {
+    const fetchTenders = async () => {
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await fetch(
+          `${getApiBaseUrl()}/api/v1/tenders?status=published&limit=50`
+        );
+
+        if (!response.ok) {
+          throw new Error("Impossible de charger la liste des appels d'offres.");
+        }
+
+        const data = await response.json();
+        const list = Array.isArray(data) ? data : data.tenders || [];
+
+        const formatted = list
+          .filter((tender: any) => tender.status === 'published')
+          .map(
+            (tender: any): PublicTender => ({
+              id: tender.id || tender.reference,
+              reference: tender.reference,
+              title: tender.title,
+              description: tender.description,
+              closing_date: tender.closing_date,
+              category: tender.category,
+              status: tender.status,
+              estimated_value: tender.estimated_value,
+              currency: tender.currency,
+              location:
+                tender.eligibility_rules?.countries?.join(', ') ||
+                'Couverture internationale'
+            })
+          );
+
+        setTenders(formatted);
+      } catch (err) {
+        console.error('Erreur lors du chargement des AO:', err);
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Une erreur est survenue lors du chargement des appels d'offres."
+        );
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchTenders();
+  }, [getApiBaseUrl]);
+
+  const getStatusColor = (status: TenderStatus) => {
     switch (status) {
-      case 'Ouvert':
+      case 'published':
+      case 'open':
         return 'bg-green-100 text-green-800';
-      case 'Bientôt clos':
-        return 'bg-yellow-100 text-yellow-800';
-      case 'Fermé':
+      case 'draft':
+        return 'bg-blue-100 text-blue-800';
+      case 'closed':
+      case 'evaluated':
+      case 'awarded':
         return 'bg-red-100 text-red-800';
+      case 'cancelled':
+        return 'bg-gray-200 text-gray-600';
       default:
-        return 'bg-gray-100 text-gray-800';
+        return 'bg-yellow-100 text-yellow-800';
     }
+  };
+
+  const getStatusLabel = (status: TenderStatus) => {
+    switch (status) {
+      case 'draft':
+        return 'Brouillon';
+      case 'published':
+        return 'Publié';
+      case 'open':
+        return 'Ouvert';
+      case 'closed':
+        return 'Clôturé';
+      case 'evaluated':
+        return 'Évalué';
+      case 'awarded':
+        return 'Attribué';
+      case 'cancelled':
+        return 'Annulé';
+      default:
+        return 'Statut inconnu';
+    }
+  };
+
+  const formatDate = (date: string) => {
+    if (!date) return 'Non précisée';
+    const parsed = new Date(date);
+    if (Number.isNaN(parsed.getTime())) {
+      return date;
+    }
+    return parsed.toLocaleDateString('fr-FR', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
   };
 
   return (
@@ -97,57 +188,87 @@ const TendersPage: React.FC = () => {
 
             {/* Liste des appels d'offres */}
             <div className="space-y-6">
-              {tenders.map((tender) => (
-                <div key={tender.id} className="bg-white rounded-2xl p-8 shadow-soft hover:shadow-lg transition-shadow">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex-1">
-                      <h3 className="text-2xl font-bold text-cameg-dark mb-2">
-                        {tender.title}
-                      </h3>
-                      <p className="text-gray-600 text-lg mb-4">
-                        {tender.description}
-                      </p>
-                    </div>
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(tender.status)}`}>
-                      {tender.status}
-                    </span>
-                  </div>
-
-                  <div className="grid md:grid-cols-3 gap-6 mb-6">
-                    <div className="flex items-center space-x-3">
-                      <Calendar className="h-5 w-5 text-cameg-blue" />
-                      <div>
-                        <p className="text-sm text-gray-500">Date limite</p>
-                        <p className="font-semibold text-cameg-dark">{tender.deadline}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <MapPin className="h-5 w-5 text-cameg-blue" />
-                      <div>
-                        <p className="text-sm text-gray-500">Localisation</p>
-                        <p className="font-semibold text-cameg-dark">{tender.location}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center space-x-3">
-                      <Clock className="h-5 w-5 text-cameg-blue" />
-                      <div>
-                        <p className="text-sm text-gray-500">Budget estimé</p>
-                        <p className="font-semibold text-cameg-dark">{tender.budget}</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex justify-between items-center">
-                    <p className="text-sm text-gray-500">
-                      Pour participer, vous devez être un fournisseur enregistré et validé.
-                    </p>
-                    <button className="btn-primary flex items-center space-x-2">
-                      <span>Voir les détails</span>
-                      <ExternalLink className="h-4 w-4" />
-                    </button>
-                  </div>
+              {isLoading && (
+                <div className="bg-white rounded-2xl p-8 shadow-soft text-center">
+                  <p className="text-lg text-gray-600">Chargement des appels d'offres en cours...</p>
                 </div>
-              ))}
+              )}
+
+              {error && !isLoading && (
+                <div className="bg-red-50 border border-red-200 rounded-2xl p-6 text-red-700 text-center">
+                  {error}
+                </div>
+              )}
+
+              {!isLoading && !error && tenders.length === 0 && (
+                <div className="bg-white rounded-2xl p-8 shadow-soft text-center">
+                  <h3 className="text-2xl font-bold text-cameg-dark mb-2">Aucun appel d'offres publié</h3>
+                  <p className="text-gray-600">
+                    Les appels d'offres seront affichés ici dès qu'ils seront publiés par l'administration.
+                  </p>
+                </div>
+              )}
+
+              {!isLoading &&
+                !error &&
+                tenders.map((tender) => (
+                  <div key={tender.id} className="bg-white rounded-2xl p-8 shadow-soft hover:shadow-lg transition-shadow">
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="flex-1">
+                        <p className="text-sm uppercase tracking-wide text-gray-400 font-semibold mb-1">
+                          Ref. {tender.reference}
+                        </p>
+                        <h3 className="text-2xl font-bold text-cameg-dark mb-2">
+                          {tender.title}
+                        </h3>
+                        <p className="text-gray-600 text-lg mb-4 line-clamp-3">
+                          {tender.description}
+                        </p>
+                      </div>
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(tender.status)}`}>
+                        {getStatusLabel(tender.status)}
+                      </span>
+                    </div>
+
+                    <div className="grid md:grid-cols-3 gap-6 mb-6">
+                      <div className="flex items-center space-x-3">
+                        <Calendar className="h-5 w-5 text-cameg-blue" />
+                        <div>
+                          <p className="text-sm text-gray-500">Date limite</p>
+                          <p className="font-semibold text-cameg-dark">{formatDate(tender.closing_date)}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        <MapPin className="h-5 w-5 text-cameg-blue" />
+                        <div>
+                          <p className="text-sm text-gray-500">Zone concernée</p>
+                          <p className="font-semibold text-cameg-dark">{tender.location}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-3">
+                        <Clock className="h-5 w-5 text-cameg-blue" />
+                        <div>
+                          <p className="text-sm text-gray-500">Budget estimé</p>
+                          <p className="font-semibold text-cameg-dark">
+                            {tender.estimated_value
+                              ? `${tender.estimated_value.toLocaleString('fr-FR')} ${tender.currency || 'FCFA'}`
+                              : 'À préciser'}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                      <p className="text-sm text-gray-500">
+                        Pour participer, connectez-vous avec votre compte fournisseur validé ou inscrivez-vous.
+                      </p>
+                      <Link to="/login" className="btn-primary flex items-center justify-center space-x-2">
+                        <span>Voir les détails (connexion requise)</span>
+                        <ExternalLink className="h-4 w-4" />
+                      </Link>
+                    </div>
+                  </div>
+                ))}
             </div>
 
             {/* Call to action */}

@@ -83,6 +83,15 @@ class SupplierSearchRequest(BaseModel):
     recommendation: Optional[str] = Field(None, description="Recommandation IA")
     country: Optional[str] = Field(None, description="Pays du fournisseur")
     limit: int = Field(50, description="Nombre maximum de résultats")
+    skip: int = Field(0, description="Décalage pour la pagination", ge=0)
+
+class SupplierExportRequest(BaseModel):
+    """Paramètres d'export CSV"""
+    query: Optional[str] = None
+    relation_type: Optional[str] = None
+    min_score: Optional[float] = None
+    recommendation: Optional[str] = None
+    country: Optional[str] = None
 
 class SupplierSearchResult(BaseModel):
     """Résultat de recherche d'un fournisseur"""
@@ -180,6 +189,27 @@ class PendingRecommendationsResponse(BaseModel):
     """Réponse des recommandations en attente"""
     recommendations: List[PendingRecommendation]
     total: int
+
+class RecentAnalysis(BaseModel):
+    """Analyse IA récente pour le monitoring"""
+    id: str
+    supplier_id: str
+    supplier_name: str
+    supplier_country: Optional[str]
+    score_after: Optional[float]
+    recommendation_after: Optional[str]
+    analysis_type: str
+    trigger_source: Optional[str]
+    created_at: datetime
+    processing_time: Optional[float]
+
+class AiMonitoringResponse(BaseModel):
+    """Monitoring temps réel du moteur IA"""
+    recent_analyses: List[RecentAnalysis]
+    pending_recommendations: int
+    high_risk_suppliers: int
+    total_logs: int
+    last_refresh: datetime
 
 class AiAnalysisLogResponse(BaseModel):
     """Log d'analyse IA"""

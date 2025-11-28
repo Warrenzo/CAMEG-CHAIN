@@ -1,8 +1,13 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
+import SecureStorage from '../services/storage';
 import AIServiceMonitoring from '../components/super-admin/AIServiceMonitoring';
+import AISupplierSearch from '../components/super-admin/AISupplierSearch';
 import DatabaseControl from '../components/super-admin/DatabaseControl';
 import SecurityAccess from '../components/super-admin/SecurityAccess';
+import UsersManagement from '../components/super-admin/UsersManagement';
+import TendersManagement from '../components/admin/TendersManagement';
 import { 
   Bell, 
   Brain, 
@@ -29,14 +34,40 @@ import {
   Upload,
   Users,
   AlertTriangle,
-  Info
+  Info,
+  ClipboardList,
+  Sparkles
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 const SuperAdminDashboardPage: React.FC = () => {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('accueil');
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+
+  // Vérifier le rôle de l'utilisateur au chargement
+  React.useEffect(() => {
+    if (!user) {
+      // L'utilisateur vient probablement de se déconnecter, on ne montre pas d'erreur
+      return;
+    }
+
+    if (user.role !== 'superadmin') {
+      console.warn('Utilisateur non autorisé:', user.role);
+      toast.error('Accès refusé. Cette page est réservée aux super-administrateurs.');
+      navigate('/dashboard');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
+
+  // Fonction utilitaire pour obtenir l'URL de base de l'API sans duplication
+  const getApiBaseUrl = () => {
+    let apiUrl = process.env['REACT_APP_API_URL'] || 'http://localhost:8000';
+    // S'assurer que l'URL ne se termine pas par /api/v1 pour éviter la duplication
+    apiUrl = apiUrl.replace(/\/api\/v1\/?$/, '');
+    return apiUrl;
+  };
 
   // Données simulées pour la démonstration
   const systemStatus = {
@@ -148,6 +179,8 @@ const SuperAdminDashboardPage: React.FC = () => {
   const handleLogout = () => {
     logout();
     toast.success('Déconnexion réussie');
+    // Rediriger vers la page de login après la déconnexion
+    navigate('/login');
   };
 
   const getStatusColor = (status: string) => {
@@ -204,6 +237,151 @@ const SuperAdminDashboardPage: React.FC = () => {
     }
   };
 
+  const [systemData, setSystemData] = useState(systemStatus);
+  const [modulesData, setModulesData] = useState(modules);
+
+  // Charger les données système depuis l'API
+  React.useEffect(() => {
+    if (!user) {
+      // Si aucun utilisateur (par exemple après déconnexion), ne rien charger
+      return;
+    }
+
+    // Vérifier que l'utilisateur est superadmin
+    if (user?.role !== 'superadmin') {
+      console.warn('Accès refusé - Droits super-administrateur requis');
+      toast.error('Accès refusé. Vous devez être super-administrateur pour accéder à cette page.');
+      navigate('/dashboard');
+      return;
+    }
+
+    let intervalId: NodeJS.Timeout | null = null;
+    let shouldContinue = true;
+
+    const loadSystemData = async () => {
+      if (!shouldContinue) return;
+      
+      try {
+        const apiUrl = getApiBaseUrl();
+        const token = SecureStorage.getToken();
+        
+        if (!token) {
+          console.warn('Aucun token trouvé, redirection vers la page de connexion');
+          shouldContinue = false;
+          if (intervalId) clearInterval(intervalId);
+          navigate('/login');
+          return;
+        }
+        
+        // Vérifier si le token est expiré avant de faire la requête
+        if (SecureStorage.isTokenExpired(token)) {
+          console.info('Token expiré détecté, redirection silencieuse vers la page de connexion');
+          SecureStorage.removeToken();
+          shouldContinue = false;
+          if (intervalId) clearInterval(intervalId);
+          toast('Votre session a expiré. Veuillez vous reconnecter.', { icon: '⏰', duration: 3000 });
+          navigate('/login');
+          return;
+        }
+        
+        const response = await fetch(`${apiUrl}/api/v1/admin/system/status`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (response.status === 401) {
+          console.info('Token expiré ou invalide détecté par le serveur, redirection vers la page de connexion');
+          SecureStorage.removeToken();
+          shouldContinue = false;
+          if (intervalId) clearInterval(intervalId);
+          toast('Votre session a expiré. Veuillez vous reconnecter.', { icon: '⏰', duration: 3000 });
+          navigate('/login');
+          return;
+        }
+        
+        if (response.status === 403) {
+          console.warn('Accès refusé - Droits super-administrateur requis');
+          toast.error('Accès refusé. Vous devez être super-administrateur pour accéder à cette fonctionnalité.');
+          shouldContinue = false;
+          if (intervalId) clearInterval(intervalId);
+          navigate('/dashboard');
+          return;
+        }
+        
+        if (response.ok) {
+          const data = await response.json();
+          setSystemData({
+            overall: data.overall,
+            uptime: data.uptime,
+            lastBackup: new Date().toISOString().split('T')[0] + ' 02:00',
+            activeModules: data.active_modules,
+            criticalErrors: 0,
+            sslStatus: 'active'
+          });
+          
+          // Mettre à jour les modules
+          if (data.modules) {
+            setModulesData([
+              {
+                name: 'Backend Python (FastAPI)',
+                status: data.modules.backend?.status || 'active',
+                lastActivity: '2s',
+                uptime: data.modules.backend?.uptime || '99.99%',
+                responseTime: data.modules.backend?.response_time || '120ms'
+              },
+              {
+                name: 'IA Service (Flask ML)',
+                status: data.modules.ai_service?.status || 'active',
+                lastActivity: '5s',
+                uptime: data.modules.ai_service?.uptime || '99.90%',
+                responseTime: data.modules.ai_service?.response_time || '220ms'
+              },
+              {
+                name: 'Frontend React',
+                status: 'online',
+                lastActivity: '3s',
+                uptime: '100%',
+                responseTime: '45ms'
+              },
+              {
+                name: 'PostgreSQL',
+                status: data.modules.database?.status || 'connected',
+                lastActivity: '—',
+                uptime: data.modules.database?.uptime || '99.98%',
+                responseTime: data.modules.database?.response_time || '15ms'
+              }
+            ]);
+          }
+        }
+      } catch (error: any) {
+        console.error('Erreur lors du chargement des données système:', error);
+        // Ne pas continuer à faire des requêtes si on a une erreur 429
+        if (error?.response?.status === 429) {
+          console.warn('Rate limiting détecté, arrêt du rafraîchissement automatique');
+          shouldContinue = false;
+          if (intervalId) clearInterval(intervalId);
+          return;
+        }
+      }
+    };
+    
+    loadSystemData();
+    // Augmenter l'intervalle à 60 secondes pour réduire la charge sur le serveur
+    intervalId = setInterval(() => {
+      if (shouldContinue) {
+        loadSystemData();
+      }
+    }, 60000);
+    
+    return () => {
+      shouldContinue = false;
+      if (intervalId) clearInterval(intervalId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.role]);
+
   const renderAccueil = () => (
     <div className="space-y-6">
       {/* Bandeau de résumé global */}
@@ -222,12 +400,19 @@ const SuperAdminDashboardPage: React.FC = () => {
               })}
             </p>
             <p className="text-blue-100 mt-2">
-              Tous les modules sont opérationnels.
+              {systemData.overall === 'stable' ? 'Tous les modules sont opérationnels.' : 'Certains modules nécessitent attention.'}
             </p>
           </div>
           <div className="text-right">
-            <div className="text-3xl font-bold">{systemStatus.uptime}</div>
+            <div className="text-3xl font-bold">{systemData.uptime}</div>
             <div className="text-blue-100">Uptime global</div>
+            <button
+              onClick={handleRefreshData}
+              className="mt-2 text-blue-100 hover:text-white text-sm flex items-center space-x-1"
+            >
+              <RefreshCw className="h-3 w-3" />
+              <span>Actualiser</span>
+            </button>
           </div>
         </div>
       </div>
@@ -238,7 +423,7 @@ const SuperAdminDashboardPage: React.FC = () => {
           <div className="flex items-center">
             <div className="w-3 h-3 bg-green-500 rounded-full mr-3"></div>
             <p className="text-green-800">
-              <strong>Système stable — {systemStatus.activeModules} modules actifs — {systemStatus.criticalErrors} erreur critique.</strong>
+              <strong>Système {systemData.overall} — {systemData.activeModules} modules actifs — {systemData.criticalErrors} erreur critique.</strong>
             </p>
           </div>
         </div>
@@ -246,7 +431,7 @@ const SuperAdminDashboardPage: React.FC = () => {
           <div className="flex items-center">
             <div className="w-3 h-3 bg-blue-500 rounded-full mr-3"></div>
             <p className="text-blue-800">
-              <strong>Dernière sauvegarde : {systemStatus.lastBackup}</strong>
+              <strong>Dernière sauvegarde : {systemData.lastBackup}</strong>
             </p>
           </div>
         </div>
@@ -254,34 +439,72 @@ const SuperAdminDashboardPage: React.FC = () => {
 
       {/* Cartes d'état des modules */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {modules.map((module, index) => (
-          <div key={index} className="card p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
-                <Server className="h-6 w-6 text-blue-600" />
+        {modulesData.map((module, index) => {
+          // Déterminer la section à ouvrir selon le module
+          const getSectionForModule = (moduleName: string): string | null => {
+            if (moduleName.includes('Backend') || moduleName.includes('FastAPI')) return 'backend';
+            if (moduleName.includes('IA') || moduleName.includes('Flask')) return 'ia';
+            if (moduleName.includes('Frontend') || moduleName.includes('React')) return 'logs'; // Logs pour le frontend
+            if (moduleName.includes('PostgreSQL') || moduleName.includes('Base')) return 'database';
+            return null;
+          };
+          
+          const targetSection = getSectionForModule(module.name);
+          
+          return (
+            <div 
+              key={index} 
+              className={`card p-6 ${targetSection ? 'cursor-pointer hover:shadow-lg transition-all duration-200 hover:scale-105' : ''}`}
+              onClick={targetSection ? (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setActiveSection(targetSection);
+                toast(`Redirection vers ${module.name}...`, { icon: '🔗', duration: 2000 });
+              } : undefined}
+              role={targetSection ? "button" : undefined}
+              tabIndex={targetSection ? 0 : undefined}
+              onKeyDown={targetSection ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setActiveSection(targetSection);
+                }
+              } : undefined}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center">
+                  <Server className="h-6 w-6 text-blue-600" />
+                </div>
+                <span className={`inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(module.status)}`}>
+                  {getStatusIcon(module.status)}
+                  <span className="ml-1">{getStatusText(module.status)}</span>
+                </span>
               </div>
-              <span className={`inline-flex items-center px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(module.status)}`}>
-                {getStatusIcon(module.status)}
-                <span className="ml-1">{getStatusText(module.status)}</span>
-              </span>
+              <h3 className="font-semibold text-gray-900 mb-2">{module.name}</h3>
+              <div className="space-y-2 text-sm text-gray-600">
+                <div className="flex justify-between">
+                  <span>Dernière activité:</span>
+                  <span className="font-medium">{module.lastActivity}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Uptime:</span>
+                  <span className="font-medium">{module.uptime}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Temps de réponse:</span>
+                  <span className="font-medium">{module.responseTime}</span>
+                </div>
+              </div>
+              {targetSection && (
+                <div className="mt-4 pt-4 border-t border-gray-200">
+                  <div className="flex items-center text-xs text-cameg-blue hover:text-blue-700">
+                    <span>Cliquez pour voir les détails</span>
+                    <ChevronRight className="h-3 w-3 ml-1" />
+                  </div>
+                </div>
+              )}
             </div>
-            <h3 className="font-semibold text-gray-900 mb-2">{module.name}</h3>
-            <div className="space-y-2 text-sm text-gray-600">
-              <div className="flex justify-between">
-                <span>Dernière activité:</span>
-                <span className="font-medium">{module.lastActivity}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Uptime:</span>
-                <span className="font-medium">{module.uptime}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Temps de réponse:</span>
-                <span className="font-medium">{module.responseTime}</span>
-              </div>
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Statistiques système */}
@@ -317,16 +540,145 @@ const SuperAdminDashboardPage: React.FC = () => {
     </div>
   );
 
+  const handleExportLogs = async () => {
+    try {
+      const apiUrl = getApiBaseUrl();
+      const token = SecureStorage.getToken();
+      
+      const response = await fetch(`${apiUrl}/api/v1/admin/system/logs/export`, {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `cameg-chain-logs-${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        toast.success('Export des logs réussi');
+      } else {
+        toast.error('Erreur lors de l\'export des logs');
+      }
+    } catch (error) {
+      toast.error('Erreur de connexion');
+    }
+  };
+
+  const handleRestartModules = async () => {
+    if (!window.confirm('Êtes-vous sûr de vouloir redémarrer les modules ? Cette action peut interrompre temporairement le service.')) {
+      return;
+    }
+    
+    try {
+      const apiUrl = getApiBaseUrl();
+      const token = SecureStorage.getToken();
+      
+      const response = await fetch(`${apiUrl}/api/v1/admin/system/restart`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      if (response.ok) {
+        toast.success('Redémarrage des modules en cours...');
+        setTimeout(() => {
+          window.location.reload();
+        }, 3000);
+      } else {
+        toast.error('Erreur lors du redémarrage');
+      }
+    } catch (error) {
+      toast.error('Erreur de connexion');
+    }
+  };
+
+  const handleViewLogs = (route: string) => {
+    toast(`Affichage des logs pour ${route}...`, { icon: 'ℹ️' });
+    // TODO: Implémenter la vue des logs détaillés
+  };
+
+  const handleRestartEndpoint = async (route: string) => {
+    try {
+      const apiUrl = getApiBaseUrl();
+      const token = SecureStorage.getToken();
+      
+      const response = await fetch(`${apiUrl}/api/v1/admin/system/endpoints/${encodeURIComponent(route)}/restart`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        toast.success(`Endpoint ${route} redémarré`);
+      } else {
+        toast.error('Erreur lors du redémarrage de l\'endpoint');
+      }
+    } catch (error) {
+      toast.error('Erreur de connexion');
+    }
+  };
+
+  const handleTestEndpoints = async () => {
+    try {
+      const apiUrl = getApiBaseUrl();
+      const token = SecureStorage.getToken();
+      
+      toast.loading('Test des endpoints en cours...');
+      
+      const response = await fetch(`${apiUrl}/api/v1/admin/system/endpoints/test`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        toast.dismiss();
+        toast.success(`Test terminé: ${data.success || 0} réussis, ${data.failed || 0} échoués`);
+      } else {
+        toast.dismiss();
+        toast.error('Erreur lors du test des endpoints');
+      }
+    } catch (error) {
+      toast.dismiss();
+      toast.error('Erreur de connexion');
+    }
+  };
+
+  const handleRefreshData = async () => {
+    toast.loading('Actualisation des données...');
+    // Recharger la page pour actualiser toutes les données
+    setTimeout(() => {
+      window.location.reload();
+    }, 1000);
+  };
+
   const renderBackendModules = () => (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h1 className="text-2xl font-bold text-cameg-dark">Modules Backend / API</h1>
         <div className="flex space-x-3">
-          <button className="btn-outline flex items-center space-x-2">
+          <button 
+            onClick={handleExportLogs}
+            className="btn-outline flex items-center space-x-2"
+          >
             <Download className="h-4 w-4" />
             <span>Export logs CSV</span>
           </button>
-          <button className="btn-primary flex items-center space-x-2">
+          <button 
+            onClick={handleRestartModules}
+            className="btn-primary flex items-center space-x-2"
+          >
             <RefreshCw className="h-4 w-4" />
             <span>Redémarrer modules</span>
           </button>
@@ -384,8 +736,18 @@ const SuperAdminDashboardPage: React.FC = () => {
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="flex space-x-2">
-                      <button className="text-cameg-blue hover:text-blue-700">Voir logs</button>
-                      <button className="text-yellow-600 hover:text-yellow-700">Redémarrer</button>
+                      <button 
+                        onClick={() => handleViewLogs(endpoint.route)}
+                        className="text-cameg-blue hover:text-blue-700"
+                      >
+                        Voir logs
+                      </button>
+                      <button 
+                        onClick={() => handleRestartEndpoint(endpoint.route)}
+                        className="text-yellow-600 hover:text-yellow-700"
+                      >
+                        Redémarrer
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -425,9 +787,24 @@ const SuperAdminDashboardPage: React.FC = () => {
         <div className="card p-6">
           <h3 className="text-lg font-semibold text-gray-900 mb-4">Actions rapides</h3>
           <div className="space-y-2">
-            <button className="w-full btn-outline text-sm">Voir logs détaillés</button>
-            <button className="w-full btn-outline text-sm">Tester endpoints</button>
-            <button className="w-full btn-outline text-sm">Redémarrer services</button>
+            <button 
+              onClick={handleExportLogs}
+              className="w-full btn-outline text-sm"
+            >
+              Voir logs détaillés
+            </button>
+            <button 
+              onClick={handleTestEndpoints}
+              className="w-full btn-outline text-sm"
+            >
+              Tester endpoints
+            </button>
+            <button 
+              onClick={handleRestartModules}
+              className="w-full btn-outline text-sm"
+            >
+              Redémarrer services
+            </button>
           </div>
         </div>
       </div>
@@ -442,6 +819,8 @@ const SuperAdminDashboardPage: React.FC = () => {
         return renderBackendModules();
       case 'ia':
         return <AIServiceMonitoring />;
+      case 'ia-search':
+        return <AISupplierSearch />;
       case 'database':
         return <DatabaseControl />;
       case 'securite':
@@ -457,7 +836,9 @@ const SuperAdminDashboardPage: React.FC = () => {
       case 'audit':
         return <div className="text-center py-12"><h2 className="text-xl font-semibold">Audit en développement</h2></div>;
       case 'utilisateurs':
-        return <div className="text-center py-12"><h2 className="text-xl font-semibold">Utilisateurs en développement</h2></div>;
+        return <UsersManagement />;
+      case 'appels-offres':
+        return <TendersManagement />;
       case 'alertes':
         return <div className="text-center py-12"><h2 className="text-xl font-semibold">Alertes en développement</h2></div>;
       case 'integrations':
@@ -572,6 +953,7 @@ const SuperAdminDashboardPage: React.FC = () => {
                 { id: 'accueil', icon: Home, label: 'Accueil / Vue système' },
                 { id: 'backend', icon: Server, label: 'Modules Backend / API' },
                 { id: 'ia', icon: Brain, label: 'Service IA' },
+                { id: 'ia-search', icon: Sparkles, label: 'Recherche IA Fournisseurs' },
                 { id: 'database', icon: Database, label: 'Base de données' },
                 { id: 'securite', icon: Shield, label: 'Sécurité & Accès' },
                 { id: 'stockage', icon: HardDrive, label: 'Stockage fichiers' },
@@ -580,6 +962,7 @@ const SuperAdminDashboardPage: React.FC = () => {
                 { id: 'sauvegardes', icon: Download, label: 'Sauvegardes' },
                 { id: 'audit', icon: History, label: 'Audit général' },
                 { id: 'utilisateurs', icon: Users, label: 'Utilisateurs / Rôles' },
+                { id: 'appels-offres', icon: ClipboardList, label: 'Appels d\'offres' },
                 { id: 'alertes', icon: AlertTriangle, label: 'Alertes critiques' },
                 { id: 'integrations', icon: Globe, label: 'Intégrations externes' },
                 { id: 'mises-a-jour', icon: Upload, label: 'Mises à jour' },

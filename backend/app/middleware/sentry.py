@@ -66,7 +66,7 @@ def init_sentry():
             "environment": environment
         })
     
-    logging.info("✅ Sentry initialisé pour le monitoring d'erreurs")
+        logging.info("Sentry initialisé pour le monitoring d'erreurs")
 
 def filter_sensitive_data(event, hint):
     """Filtrer les données sensibles des événements Sentry"""

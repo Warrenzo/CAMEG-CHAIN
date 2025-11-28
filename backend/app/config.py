@@ -20,11 +20,11 @@ class Settings:
         """Valider la configuration de sécurité"""
         if self.ENVIRONMENT == "production":
             if self.SECRET_KEY == "your-secret-key-change-in-production":
-                raise ValueError("❌ SECRET_KEY doit être changé en production!")
+                raise ValueError("SECRET_KEY doit etre change en production!")
             if self.DEBUG:
-                raise ValueError("❌ DEBUG doit être False en production!")
+                raise ValueError("DEBUG doit etre False en production!")
             if "localhost" in self.ALLOWED_ORIGINS:
-                raise ValueError("❌ localhost ne doit pas être dans ALLOWED_ORIGINS en production!")
+                raise ValueError("localhost ne doit pas etre dans ALLOWED_ORIGINS en production!")
     
     # Base de données
     DATABASE_URL: str = os.getenv(
@@ -63,11 +63,15 @@ class Settings:
         "http://127.0.0.1:3002",
         "http://localhost:3003",
         "http://127.0.0.1:3003",
+        "http://localhost:3004",
+        "http://127.0.0.1:3004",
+        "http://localhost:3005",
+        "http://127.0.0.1:3005",
         os.getenv("FRONTEND_URL", "http://localhost:3000")
     ]
     
-    # Méthodes HTTP autorisées (sécurisé)
-    ALLOWED_METHODS: List[str] = ["GET", "POST", "PUT", "DELETE", "PATCH"]
+    # Méthodes HTTP autorisées (sécurisé) - OPTIONS nécessaire pour CORS preflight
+    ALLOWED_METHODS: List[str] = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
     
     # Headers autorisés (sécurisé)
     ALLOWED_HEADERS: List[str] = [

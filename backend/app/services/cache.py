@@ -31,9 +31,9 @@ class RedisCache:
         # Test de connexion
         try:
             self.redis_client.ping()
-            logger.info("✅ Connexion Redis établie")
+            logger.info("Connexion Redis etablie")
         except RedisError as e:
-            logger.error(f"❌ Erreur connexion Redis: {e}")
+            logger.error("Erreur connexion Redis: %s", e)
             raise
     
     def set(self, key: str, value: Any, expire: Optional[int] = None) -> bool:
@@ -133,7 +133,7 @@ def get_cache():
         try:
             cache = RedisCache()
         except Exception as e:
-            logger.warning(f"Redis non disponible, utilisation du cache mémoire: {e}")
+            logger.warning("Redis non disponible, utilisation du cache memoire: %s", e)
             cache = MemoryCache()
     return cache
 
@@ -142,7 +142,7 @@ class MemoryCache:
     
     def __init__(self):
         self._cache = {}
-        logger.info("✅ Cache mémoire initialisé (fallback)")
+        logger.info("Cache memoire initialise (fallback)")
     
     def set(self, key: str, value: Any, expire: Optional[int] = None) -> bool:
         """Stocker une valeur dans le cache mémoire"""

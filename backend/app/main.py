@@ -5,6 +5,7 @@ from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from fastapi.encoders import jsonable_encoder
 from datetime import datetime
 import uvicorn
 
@@ -115,36 +116,93 @@ app = FastAPI(
     ]
 )
 
-# Gestionnaire d'erreurs global pour les erreurs de validation Pydantic
+# Configuration CORS sécurisée (DOIT être ajouté en premier pour que les headers CORS soient présents)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=settings.ALLOWED_METHODS,
+    allow_headers=settings.ALLOWED_HEADERS,
+    expose_headers=["*"],
+)
+
+# Gestionnaire d'erreurs global pour les HTTPException
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """Gestionnaire d'erreurs HTTP avec headers CORS"""
+    origin = request.headers.get("origin")
+    headers = {}
+    if origin and origin in settings.ALLOWED_ORIGINS:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Methods"] = ", ".join(settings.ALLOWED_METHODS)
+        headers["Access-Control-Allow-Headers"] = ", ".join(settings.ALLOWED_HEADERS)
+    
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": exc.detail
+        },
+        headers=headers
+    )
+
+# Gestionnaire d'erreurs global pour les erreurs de validation Pydantic avec CORS
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Gestionnaire d'erreurs de validation Pydantic"""
+    """Gestionnaire d'erreurs de validation Pydantic avec headers CORS"""
+    origin = request.headers.get("origin")
+    headers = {}
+    if origin and origin in settings.ALLOWED_ORIGINS:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Methods"] = ", ".join(settings.ALLOWED_METHODS)
+        headers["Access-Control-Allow-Headers"] = ", ".join(settings.ALLOWED_HEADERS)
+    
+    raw_errors = exc.errors()
     errors = []
-    for error in exc.errors():
+    for error in raw_errors:
         field = " -> ".join(str(loc) for loc in error["loc"])
         message = error["msg"]
         errors.append(f"{field}: {message}")
+    serializable_errors = jsonable_encoder(raw_errors)
     
     return JSONResponse(
         status_code=422,
         content={
             "detail": "; ".join(errors),
-            "errors": exc.errors()
-        }
+            "errors": serializable_errors
+        },
+        headers=headers
     )
 
-# Gestionnaire d'erreurs global pour les HTTPException
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
-    """Gestionnaire d'erreurs HTTP"""
+# Gestionnaire d'erreurs global pour toutes les exceptions non gérées (500) avec CORS
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """Gestionnaire d'erreurs global pour toutes les exceptions avec headers CORS"""
+    logger = get_logger(__name__)
+    logger.error(f"Erreur non gérée: {exc}", exc_info=True)
+    
+    origin = request.headers.get("origin")
+    headers = {}
+    if origin and origin in settings.ALLOWED_ORIGINS:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Access-Control-Allow-Credentials"] = "true"
+        headers["Access-Control-Allow-Methods"] = ", ".join(settings.ALLOWED_METHODS)
+        headers["Access-Control-Allow-Headers"] = ", ".join(settings.ALLOWED_HEADERS)
+    
+    # En développement, afficher le détail de l'erreur
+    detail = str(exc) if settings.DEBUG else "Une erreur interne du serveur s'est produite"
+    
     return JSONResponse(
-        status_code=exc.status_code,
+        status_code=500,
         content={
-            "detail": exc.detail
-        }
+            "detail": detail,
+            "type": type(exc).__name__
+        },
+        headers=headers
     )
 
-# Middleware de sécurité (doit être ajouté en premier)
+# Middleware de sécurité (doit être ajouté après CORS)
 @app.middleware("http")
 async def security_middleware_handler(request: Request, call_next):
     return await security_middleware(request, call_next)
@@ -155,20 +213,16 @@ from app.middleware.metrics import metrics_middleware
 async def metrics_middleware_handler(request: Request, call_next):
     return await metrics_middleware(request, call_next)
 
-# Configuration CORS sécurisée
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
-    allow_credentials=True,
-    allow_methods=settings.ALLOWED_METHODS,
-    allow_headers=settings.ALLOWED_HEADERS,
-)
-
 # Inclure les routes
+from app.routes.admin_system import router as admin_system_router
+from app.routes.admin_users import router as admin_users_router
+
 app.include_router(auth_router)
 app.include_router(supplier_router)
 app.include_router(tender_router)
 app.include_router(ai_supplier_router)
+app.include_router(admin_system_router)
+app.include_router(admin_users_router)
 
 @app.on_event("startup")
 async def startup_event():
@@ -177,24 +231,24 @@ async def startup_event():
     setup_logging(settings.ENVIRONMENT, "INFO")
     logger = get_logger(__name__)
     
-    logger.info("🚀 Démarrage de l'API CAMEG-CHAIN...")
+    logger.info("Demarrage de l'API CAMEG-CHAIN...")
     
     # Initialiser Sentry
     try:
         init_sentry()
-        logger.info("✅ Sentry initialisé")
+        logger.info("Sentry initialise")
     except Exception as e:
-        logger.warning(f"⚠️ Erreur initialisation Sentry: {e}")
+        logger.warning(f"Erreur initialisation Sentry: {e}")
     
     # Tester la connexion à la base de données
     if test_connection():
         # Initialiser la base de données
         init_db()
-        logger.info("✅ Base de données initialisée")
+        logger.info("Base de donnees initialisee")
     else:
-        logger.error("⚠️  Problème de connexion à la base de données")
+        logger.error("Probleme de connexion a la base de donnees")
     
-    logger.info(f"🌐 API disponible sur http://{settings.API_HOST}:{settings.API_PORT}")
+    logger.info(f"API disponible sur http://{settings.API_HOST}:{settings.API_PORT}")
 
 @app.get("/")
 async def root():

@@ -4,7 +4,7 @@ Service de gestion des appels d'offres avec système de permissions
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import uuid
 
 from app.models.tender import (
@@ -15,6 +15,9 @@ from app.models.user import User, Supplier, UserStatus, UserRole
 from app.schemas.tender import (
     TenderCreate, TenderUpdate, ExpressionOfInterestCreate, BidCreate, BidUpdate
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 class TenderService:
     """Service de gestion des appels d'offres"""
@@ -22,12 +25,13 @@ class TenderService:
     @staticmethod
     def create_tender(db: Session, tender_data: TenderCreate, creator_id: str) -> Tender:
         """Créer un appel d'offres"""
-        # Vérifier que le créateur est admin ou manager
+        # Note: La vérification des permissions est déjà faite dans la route (require_superadmin_or_admin)
+        # On vérifie juste que le créateur existe
         creator = db.query(User).filter(User.id == creator_id).first()
-        if not creator or creator.role not in [UserRole.ADMIN, UserRole.MANAGER]:
+        if not creator:
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Seuls les administrateurs et managers peuvent créer des appels d'offres"
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Créateur non trouvé"
             )
         
         # Vérifier l'unicité de la référence
@@ -38,31 +42,100 @@ class TenderService:
                 detail="Une référence d'appel d'offres avec ce numéro existe déjà"
             )
         
+        # Convertir creator_id en UUID si nécessaire
+        creator_uuid = uuid.UUID(creator_id) if isinstance(creator_id, str) else creator_id
+        
+        # S'assurer que tender_type est un enum valide
+        tender_type_enum = tender_data.tender_type
+        if isinstance(tender_type_enum, str):
+            try:
+                tender_type_enum = TenderType(tender_type_enum)
+            except ValueError:
+                tender_type_enum = TenderType.OPEN  # Valeur par défaut
+        
+        # S'assurer que les dates sont timezone-aware
+        opening_date = tender_data.opening_date
+        closing_date = tender_data.closing_date
+        
+        # Si les dates ne sont pas timezone-aware, les convertir
+        if opening_date and opening_date.tzinfo is None:
+            opening_date = opening_date.replace(tzinfo=timezone.utc)
+        if closing_date and closing_date.tzinfo is None:
+            closing_date = closing_date.replace(tzinfo=timezone.utc)
+        
+        # Valider que la description n'est pas vide
+        if not tender_data.description or not tender_data.description.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="La description est obligatoire et ne peut pas être vide"
+            )
+        
+        # S'assurer que les enums sont convertis en leurs valeurs string (minuscules)
+        # Si tender_type_enum est déjà un enum, utiliser .value, sinon le convertir
+        if isinstance(tender_type_enum, TenderType):
+            tender_type_value = tender_type_enum.value
+        elif isinstance(tender_type_enum, str):
+            # Si c'est une string, s'assurer qu'elle est en minuscules
+            tender_type_value = tender_type_enum.lower()
+        else:
+            tender_type_value = str(tender_type_enum).lower()
+        
+        status_value = TenderStatus.DRAFT.value  # Toujours "draft" en minuscules
+        
         tender = Tender(
             reference=tender_data.reference,
             title=tender_data.title,
-            description=tender_data.description,
+            description=tender_data.description.strip(),  # Nettoyer les espaces
             category=tender_data.category,
-            opening_date=tender_data.opening_date,
-            closing_date=tender_data.closing_date,
-            tender_type=tender_data.tender_type,
+            opening_date=opening_date,
+            closing_date=closing_date,
+            tender_type=tender_type_value,  # Utiliser la valeur string directement (en minuscules)
+            status=status_value,  # Utiliser la valeur string directement ("draft")
             estimated_value=tender_data.estimated_value,
-            currency=tender_data.currency,
-            eligibility_rules=tender_data.eligibility_rules,
-            required_documents=tender_data.required_documents,
-            evaluation_criteria=tender_data.evaluation_criteria,
+            currency=tender_data.currency or "XOF",
+            eligibility_rules=tender_data.eligibility_rules or {},
+            required_documents=tender_data.required_documents or [],
+            evaluation_criteria=tender_data.evaluation_criteria or {},
             contact_person=tender_data.contact_person,
             contact_email=tender_data.contact_email,
             contact_phone=tender_data.contact_phone,
-            publication_date=datetime.utcnow(),
-            created_by=creator_id
+            publication_date=datetime.now(timezone.utc),  # Timezone-aware datetime
+            created_by=creator_uuid
         )
         
-        db.add(tender)
-        db.commit()
-        db.refresh(tender)
-        
-        return tender
+        try:
+            logger.info("Ajout de l'appel d'offres en base de donnees")
+            db.add(tender)
+            logger.info("Validation de la transaction")
+            db.commit()
+            logger.info("Rafraichissement de l'objet ORM")
+            db.refresh(tender)
+            logger.info("Appel d'offres cree avec succes en base: %s", tender.id)
+            return tender
+        except Exception as db_error:
+            db.rollback()
+            import traceback
+            error_trace = traceback.format_exc()
+            # Logger l'erreur complète pour le débogage
+            logger.error("Erreur DB lors de la creation de l'appel d'offres: %s", str(db_error))
+            logger.error("Type d'erreur: %s", type(db_error).__name__)
+            logger.error("Traceback complet:\n%s", error_trace)
+            
+            # Extraire plus de détails si c'est une erreur SQLAlchemy
+            if hasattr(db_error, 'orig'):
+                logger.error("Erreur SQLAlchemy originale: %s", str(db_error.orig))
+            if hasattr(db_error, 'statement'):
+                logger.error("Requete SQL: %s", str(db_error.statement))
+            
+            # Message d'erreur plus détaillé pour le client
+            error_detail = str(db_error)
+            if hasattr(db_error, 'orig'):
+                error_detail = f"{error_detail} (Original: {str(db_error.orig)})"
+            
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Erreur de base de données: {error_detail}"
+            )
     
     @staticmethod
     def get_tender_by_id(db: Session, tender_id: str) -> Optional[Tender]:
@@ -82,11 +155,11 @@ class TenderService:
         query = db.query(Tender)
         
         if status:
-            query = query.filter(Tender.status == status)
+            query = query.filter(Tender.status == status.value)  # Comparer avec la valeur string
         if category:
             query = query.filter(Tender.category == category)
         if tender_type:
-            query = query.filter(Tender.tender_type == tender_type)
+            query = query.filter(Tender.tender_type == tender_type.value)  # Comparer avec la valeur string
         
         return query.offset(skip).limit(limit).all()
     
@@ -211,7 +284,7 @@ class TenderService:
             )
         
         # Vérifier que l'AO est ouvert
-        if tender.status not in [TenderStatus.PUBLISHED, TenderStatus.OPEN]:
+        if tender.status not in [TenderStatus.PUBLISHED.value, TenderStatus.OPEN.value]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cet appel d'offres n'accepte plus de manifestations d'intérêt"
@@ -272,7 +345,7 @@ class TenderService:
             )
         
         # Vérifier que l'AO est ouvert
-        if tender.status not in [TenderStatus.PUBLISHED, TenderStatus.OPEN]:
+        if tender.status not in [TenderStatus.PUBLISHED.value, TenderStatus.OPEN.value]:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cet appel d'offres n'accepte plus de soumissions"
@@ -310,7 +383,7 @@ class TenderService:
             validity_period=bid_data.validity_period,
             technical_proposal=bid_data.technical_proposal,
             delivery_time=bid_data.delivery_time,
-            status=BidStatus.DRAFT
+            status=BidStatus.DRAFT.value  # Utiliser la valeur string directement
         )
         
         db.add(bid)
@@ -333,7 +406,7 @@ class TenderService:
                 detail="Soumission non trouvée"
             )
         
-        if bid.status != BidStatus.DRAFT:
+        if bid.status != BidStatus.DRAFT.value:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Cette soumission a déjà été soumise"
@@ -349,7 +422,7 @@ class TenderService:
         # TODO: Vérifier la complétude des documents requis
         
         # Marquer comme soumis
-        bid.status = BidStatus.SUBMITTED
+        bid.status = BidStatus.SUBMITTED.value  # Utiliser la valeur string directement
         bid.submitted_at = datetime.utcnow()
         
         db.commit()
@@ -371,9 +444,9 @@ class TenderService:
     def get_tender_stats(db: Session) -> Dict[str, Any]:
         """Obtenir les statistiques des appels d'offres"""
         total_tenders = db.query(Tender).count()
-        published_tenders = db.query(Tender).filter(Tender.status == TenderStatus.PUBLISHED).count()
-        open_tenders = db.query(Tender).filter(Tender.status == TenderStatus.OPEN).count()
-        closed_tenders = db.query(Tender).filter(Tender.status == TenderStatus.CLOSED).count()
+        published_tenders = db.query(Tender).filter(Tender.status == TenderStatus.PUBLISHED.value).count()
+        open_tenders = db.query(Tender).filter(Tender.status == TenderStatus.OPEN.value).count()
+        closed_tenders = db.query(Tender).filter(Tender.status == TenderStatus.CLOSED.value).count()
         
         total_eois = db.query(ExpressionOfInterest).count()
         total_bids = db.query(Bid).count()

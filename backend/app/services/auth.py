@@ -5,6 +5,7 @@ import re
 import time
 import hashlib
 import secrets
+import uuid
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Set
 from jose import JWTError, jwt
@@ -41,6 +42,17 @@ class AuthService:
         """Valider la force d'un mot de passe"""
         if len(password) < 8:
             return False, "Le mot de passe doit contenir au moins 8 caractères"
+
+        # Vérifier les mots de passe communs le plus tôt possible
+        common_passwords = [
+            "password", "123456", "123456789", "qwerty", "abc123",
+            "password123", "admin", "letmein", "welcome", "monkey",
+            "12345678", "1234567890", "password1", "qwerty123", "admin123",
+            "root", "toor", "pass", "test", "guest", "user", "demo",
+            "cameg", "togo", "pharma", "supplier", "evaluator"
+        ]
+        if password.lower() in common_passwords:
+            return False, "Ce mot de passe est trop commun"
         
         if not re.search(r"[A-Z]", password):
             return False, "Le mot de passe doit contenir au moins une majuscule"
@@ -54,27 +66,24 @@ class AuthService:
         if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
             return False, "Le mot de passe doit contenir au moins un caractère spécial"
         
-        # Vérifier les mots de passe communs
-        common_passwords = [
-            "password", "123456", "123456789", "qwerty", "abc123",
-            "password123", "admin", "letmein", "welcome", "monkey",
-            "12345678", "1234567890", "password1", "qwerty123", "admin123",
-            "root", "toor", "pass", "test", "guest", "user", "demo",
-            "cameg", "togo", "pharma", "supplier", "evaluator"
-        ]
-        
-        if password.lower() in common_passwords:
-            return False, "Ce mot de passe est trop commun"
-        
         return True, "Mot de passe valide"
     
     @staticmethod
     def verify_password(plain_password: str, hashed_password: str) -> bool:
         """Vérifier un mot de passe avec protection contre les attaques par timing"""
         try:
+            # Tronquer le mot de passe à 72 bytes pour bcrypt
+            password_bytes = plain_password.encode('utf-8')
+            if len(password_bytes) > 72:
+                password_bytes = password_bytes[:72]
+            
+            # Utiliser directement bcrypt pour éviter les problèmes avec passlib
+            import bcrypt
+            hashed_bytes = hashed_password.encode('utf-8')
+            
             # Utiliser un délai constant pour éviter les attaques par timing
             start_time = time.time()
-            result = pwd_context.verify(plain_password, hashed_password)
+            result = bcrypt.checkpw(password_bytes, hashed_bytes)
             
             # Délai minimum pour éviter les attaques par timing
             elapsed = time.time() - start_time
@@ -99,7 +108,15 @@ class AuthService:
                 detail=message
             )
         
-        return pwd_context.hash(password)
+        # Utiliser directement bcrypt pour éviter les problèmes avec passlib
+        import bcrypt
+        password_bytes = password.encode('utf-8')
+        # Tronquer à 72 bytes pour bcrypt
+        if len(password_bytes) > 72:
+            password_bytes = password_bytes[:72]
+        salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
+        hashed = bcrypt.hashpw(password_bytes, salt)
+        return hashed.decode('utf-8')
     
     @staticmethod
     def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
@@ -116,7 +133,8 @@ class AuthService:
             "iat": datetime.utcnow(),
             "jti": secrets.token_urlsafe(16),  # JWT ID unique
             "iss": "CAMEG-CHAIN-API",  # Issuer
-            "aud": "CAMEG-CHAIN-Frontend"  # Audience
+            "aud": "CAMEG-CHAIN-Frontend",  # Audience
+            "type": "access"  # Type de token
         })
         
         encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
@@ -127,7 +145,32 @@ class AuthService:
         return encoded_jwt
     
     @staticmethod
-    def verify_token(token: str) -> dict:
+    def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None):
+        """Créer un refresh token JWT sécurisé"""
+        to_encode = data.copy()
+        if expires_delta:
+            expire = datetime.utcnow() + expires_delta
+        else:
+            expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+        
+        # Ajouter des claims de sécurité pour le refresh token
+        to_encode.update({
+            "exp": expire,
+            "iat": datetime.utcnow(),
+            "jti": secrets.token_urlsafe(16),  # JWT ID unique
+            "iss": "CAMEG-CHAIN-API",  # Issuer
+            "aud": "CAMEG-CHAIN-Frontend",  # Audience
+            "type": "refresh"  # Type de token
+        })
+        
+        encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+        
+        logger.info(f"Refresh token créé pour l'utilisateur {data.get('sub', 'unknown')}")
+        
+        return encoded_jwt
+    
+    @staticmethod
+    def verify_token(token: str, token_type: str = "access") -> dict:
         """Vérifier un token JWT avec blacklist"""
         # Vérifier si le token est dans la blacklist
         if token in token_blacklist:
@@ -146,6 +189,14 @@ class AuthService:
                 audience="CAMEG-CHAIN-Frontend",
                 issuer="CAMEG-CHAIN-API"
             )
+            
+            # Vérifier le type de token
+            if payload.get("type") != token_type:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=f"Type de token invalide. Attendu: {token_type}",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
             
             # Vérifier l'expiration
             if datetime.utcnow() > datetime.fromtimestamp(payload["exp"]):
@@ -212,17 +263,24 @@ class AuthService:
     @staticmethod
     def authenticate_user(db: Session, email: str, password: str, ip_address: str = None) -> Optional[User]:
         """Authentifier un utilisateur avec protection contre les attaques"""
-        # Vérifier si le compte est verrouillé
+        user = db.query(User).filter(User.email == email).first()
+        user_exists = user is not None
+        
+        # Vérifier si le compte (ou l'email) est verrouillé
         if AuthService._is_account_locked(email):
             logger.warning(f"Tentative de connexion sur compte verrouillé: {email}")
             AuthService._record_login_attempt(email, False, ip_address)
+            if user_exists:
+                raise HTTPException(
+                    status_code=status.HTTP_423_LOCKED,
+                    detail=f"Compte temporairement verrouillé. Réessayez dans {settings.LOCKOUT_DURATION_MINUTES} minutes."
+                )
             raise HTTPException(
-                status_code=status.HTTP_423_LOCKED,
-                detail=f"Compte temporairement verrouillé. Réessayez dans {settings.LOCKOUT_DURATION_MINUTES} minutes."
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Trop de tentatives. Réessayez dans quelques minutes."
             )
         
-        user = db.query(User).filter(User.email == email).first()
-        if not user:
+        if not user_exists:
             # Délai même si l'utilisateur n'existe pas (protection contre l'énumération)
             time.sleep(0.5)  # Délai plus long pour une meilleure protection
             AuthService._record_login_attempt(email, False, ip_address)
@@ -274,12 +332,24 @@ class AuthService:
     @staticmethod
     def get_user_by_id(db: Session, user_id: str) -> Optional[User]:
         """Récupérer un utilisateur par ID"""
-        return db.query(User).filter(User.id == user_id).first()
+        try:
+            uuid_obj = uuid.UUID(str(user_id))
+        except (ValueError, TypeError):
+            logger.warning(f"Identifiant utilisateur invalide: {user_id}")
+            return None
+        return db.query(User).filter(User.id == uuid_obj).first()
     
     @staticmethod
     def update_user_status(db: Session, user_id: str, status: UserStatus) -> User:
         """Mettre à jour le statut d'un utilisateur"""
-        user = db.query(User).filter(User.id == user_id).first()
+        try:
+            uuid_obj = uuid.UUID(str(user_id))
+        except (ValueError, TypeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Identifiant utilisateur invalide"
+            )
+        user = db.query(User).filter(User.id == uuid_obj).first()
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -295,7 +365,12 @@ class AuthService:
     @staticmethod
     def update_last_login(db: Session, user_id: str):
         """Mettre à jour la dernière connexion"""
-        user = db.query(User).filter(User.id == user_id).first()
+        try:
+            uuid_obj = uuid.UUID(str(user_id))
+        except (ValueError, TypeError):
+            logger.warning(f"Impossible de mettre à jour last_login: identifiant invalide {user_id}")
+            return
+        user = db.query(User).filter(User.id == uuid_obj).first()
         if user:
             user.last_login = datetime.utcnow()
             db.commit()

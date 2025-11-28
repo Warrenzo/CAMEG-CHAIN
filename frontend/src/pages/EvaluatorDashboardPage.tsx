@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import EvaluationGrid from '../components/evaluator/EvaluationGrid';
 import AIAnalysis from '../components/evaluator/AIAnalysis';
@@ -27,6 +28,7 @@ import toast from 'react-hot-toast';
 
 const EvaluatorDashboardPage: React.FC = () => {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [activeSection, setActiveSection] = useState('accueil');
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
 
@@ -99,6 +101,8 @@ const EvaluatorDashboardPage: React.FC = () => {
   const handleLogout = () => {
     logout();
     toast.success('Déconnexion réussie');
+    // Rediriger vers la page de login après la déconnexion
+    navigate('/login');
   };
 
   const getStatusColor = (status: string) => {
